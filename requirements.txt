@@ -1,0 +1,20 @@
+# Dépendances principales
+diffq
+torch>=2.0.0
+whisper_timestamped>=1.0.0
+openai>=1.0.0
+yt-dlp>=2023.3.4
+pydub>=0.25.1
+soundfile>=0.12.1
+librosa>=0.10.0
+emoji>=2.2.0
+requests>=2.28.1
+transformers>=4.30.0
+
+# Dépendances pour la séparation audio
+demucs>=4.0.0
+
+# Dépendances supplémentaires
+numpy>=1.23.5
+pathlib>=1.0.1
+unicodedata2>=15.0.0
