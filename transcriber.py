@@ -6,6 +6,11 @@ import csv
 import torch
 from utils import progress_queue, config  # ✅ import config
 import logging
+logging.getLogger("huggingface_hub.file_download").setLevel(logging.ERROR)
+logging.getLogger("huggingface_hub.utils").setLevel(logging.ERROR)
+logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
+from model_downloader import download_whisper_model
+
 
 progress_queue.put({
     'value': 10,
@@ -71,84 +76,56 @@ def transcribe_segments_with_whisper(segment_files, pyannote_timestamps, accurat
 
 def transcribe_audio(audio_path, transcript_base_name, model_name=None, accurate=False, use_gpu=None, **kwargs):
     """
-    Transcrit un fichier audio avec le modèle Whisper spécifié.
-    
-    Args:
-        audio_path: Chemin vers le fichier audio à transcrire
-        transcript_base_name: Nom de base pour les fichiers de sortie
-        model_name: Nom du modèle Whisper à utiliser 
-        accurate: Si True, utilise des paramètres pour une transcription plus précise
-        use_gpu: Si True, utilise le GPU pour la transcription
+    Transcrit un fichier audio avec le modèle Whisper spécifié (compatible avec whisper_timestamped).
     """
-    # Désactiver les logs verbeux de huggingface
+    import whisper_timestamped as whisper
+
     logging.getLogger("huggingface_hub").setLevel(logging.WARNING)
-    
-    logging.info(f"ℹ️ Modèle sélectionné pour la transcription: {model_name}")
-    
-    # Définir le modèle à utiliser
+
     if model_name is None:
-        model_name = "openai/whisper-large-v3-turbo"
-        logging.info(f"ℹ️ Utilisation du modèle par défaut: {model_name}")
-    elif not model_name.startswith("openai/whisper-"):
-        model_name = f"openai/whisper-{model_name}"
-        logging.info(f"ℹ️ Modèle formaté: {model_name}")
-    
-    # Déterminer le dispositif à utiliser (GPU ou CPU)
+        model_name = "large-v3"
+    logging.info(f"ℹ️ Modèle sélectionné pour la transcription: {model_name}")
+
     if use_gpu is None:
         use_gpu = torch.cuda.is_available()
     device = "cuda" if use_gpu else "cpu"
-    
-    # Sur CPU, éviter les modèles trop grands
-    if device == "cpu" and (model_name.endswith("large") or model_name.endswith("large-v3-turbo")):
-        logging.info(f"Usage CPU détecté: le modèle {model_name} peut être trop lourd. Utilisation de 'small' à la place.")
-        model_name = "openai/whisper-small"
-    
-    # Mettre à jour la progression dans l'interface
-    try:
-        # Extraire le nom propre du modèle pour l'affichage
-        model_short_name = model_name.split("/")[-1]
-        progress_queue.put({
-            "value": 20, 
-            "status_text": f"Chargement du modèle {model_short_name}..."
-        })
-    except:
-        # En cas d'erreur, continuer sans mise à jour de l'UI
-        pass
-    
-    # Chargement du modèle
-    logging.info(f"Chargement du modèle {model_name} sur {device}...")
-    model = whisper.load_model(model_name).to(device)
-    
-    # Mise à jour de la progression après le chargement
-    try:
-        progress_queue.put({
-            "value": 30, 
-            "status_text": f"Transcription en cours avec {model_short_name}..."
-        })
-    except:
-        pass
-    
-    # Configuration pour la transcription précise si demandé
+
+    if device == "cpu" and ("large" in model_name or "turbo" in model_name):
+        logging.info(f"💡 Modèle {model_name} trop lourd pour CPU, remplacement par 'small'")
+        model_name = "small"
+
+    progress_queue.put({
+        "value": 20,
+        "status_text": f"Chargement du modèle {model_name}..."
+    })
+
+    logging.info(f"🚀 Chargement du modèle {model_name} sur {device}")
+    model = whisper.load_model(model_name, device=device)
+
+    progress_queue.put({
+        "value": 30,
+        "status_text": f"Transcription en cours avec {model_name}..."
+    })
+
+    # Options plus précises si "accurate"
     if accurate:
         kwargs['beam_size'] = 5
         kwargs['best_of'] = 5
         kwargs['temperature'] = (0.0, 0.2, 0.4, 0.6, 0.8, 1.0)
         kwargs.pop('accurate', None)
-    
-    # Transcription
+
     result = whisper.transcribe(model, audio_path, **kwargs)
-    
-    # Enregistrement des résultats dans différents formats
-    transcript_json_path = f"{transcript_base_name}.json"
-    with open(transcript_json_path, 'w', encoding='utf-8') as f:
+
+    with open(f"{transcript_base_name}.json", 'w', encoding='utf-8') as f:
         json.dump(result, f, ensure_ascii=False, indent=4)
-    
+
     convert_transcription_to_srt(result, f"{transcript_base_name}.srt")
     convert_transcription_to_vtt(result, f"{transcript_base_name}.vtt")
     convert_transcription_to_csv(result, f"{transcript_base_name}.csv")
     convert_transcription_to_tsv(result, f"{transcript_base_name}.tsv")
-    
-    logging.info(f"Transcription terminée et enregistrée sous {transcript_base_name} aux formats disponibles.")
+
+    logging.info(f"✅ Transcription enregistrée sous {transcript_base_name} aux formats .json/.srt/.vtt/.csv/.tsv")
+
     return result
 
 def run_transcription(model, audio_path, transcript_base_name, **kwargs):

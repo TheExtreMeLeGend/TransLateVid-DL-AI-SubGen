@@ -24,6 +24,15 @@ command_queue = queue.Queue()
 KEYS_FILE = "api_keys.json"
 CONFIG_FILE = "config.json"
 
+class LockMessageFilter(logging.Filter):
+    """Filtre qui bloque les messages liés aux verrous."""
+    def filter(self, record):
+        if hasattr(record, 'getMessage'):
+            message = record.getMessage().lower()
+            if 'lock' in message and ('attempting to acquire' in message or 'not acquired' in message):
+                return False
+        return True
+
 class LoggingRedirector(io.StringIO):
     """Redirige stdout et stderr vers le logger."""
     def __init__(self, logger, level):
@@ -65,6 +74,15 @@ def setup_logger():
     if not os.path.exists('logs'):
         os.makedirs('logs')
 
+    # Désactiver complètement les logs de verrou huggingface
+    logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("openai").setLevel(logging.WARNING)
+    logging.getLogger("urllib3").setLevel(logging.WARNING)
+    logging.getLogger("requests").setLevel(logging.WARNING)
+    logging.getLogger("huggingface_hub.file_download").setLevel(logging.ERROR)
+    logging.getLogger("huggingface_hub.utils").setLevel(logging.ERROR)
+
     log_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
 
     queue_handler = QueueHandler(log_queue)
@@ -78,6 +96,12 @@ def setup_logger():
     console_handler = logging.StreamHandler()
     console_handler.setFormatter(log_formatter)
     console_handler.setLevel(logging.DEBUG)
+
+    # Appliquer le filtre de messages de lock à tous les handlers
+    lock_filter = LockMessageFilter()
+    queue_handler.addFilter(lock_filter)
+    file_handler.addFilter(lock_filter)
+    console_handler.addFilter(lock_filter)
 
     root_logger = logging.getLogger()
     root_logger.setLevel(logging.DEBUG)
@@ -109,7 +133,7 @@ class Config:
         self.use_gpu = torch.cuda.is_available()
         self.output_folder = "output"
         self.whisper_model = "large-v3-turbo"
-        self.use_threading = True  # ✅ Ajout de l'attribut ici
+        self.use_threading = True
         self.load_config()
 
     def load_api_keys(self):
@@ -147,7 +171,7 @@ class Config:
                     self.use_gpu = config.get("use_gpu", self.use_gpu)
                     self.output_folder = config.get("output_folder", self.output_folder)
                     self.whisper_model = config.get("whisper_model", self.whisper_model)
-                    self.use_threading = config.get("use_threading", self.use_threading)  # ✅ Ajout ici
+                    self.use_threading = config.get("use_threading", self.use_threading)
                 logging.info("Configuration chargée avec succès")
             except Exception as e:
                 logging.error(f"Erreur lors du chargement de la configuration: {str(e)}")
@@ -161,7 +185,7 @@ class Config:
                 "use_gpu": self.use_gpu,
                 "output_folder": self.output_folder,
                 "whisper_model": self.whisper_model,
-                "use_threading": self.use_threading  # ✅ Ajout ici
+                "use_threading": self.use_threading
             }
             with open(CONFIG_FILE, 'w') as file:
                 json.dump(config, file)
@@ -226,5 +250,5 @@ def format_whisper_model_name(model_name):
         return f"openai/whisper-{model_name}"
     return model_name
 
-# ✅ Créer une instance globale unique
+# Créer une instance globale unique
 config = Config()

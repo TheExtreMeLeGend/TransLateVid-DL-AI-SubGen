@@ -11,6 +11,12 @@ from tkinter import ttk
 from tkinter.ttk import Combobox
 import os
 import logging
+
+# Supprimer tous les logs inutiles Hugging Face
+logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
+logging.getLogger("huggingface_hub.file_download").setLevel(logging.ERROR)
+logging.getLogger("huggingface_hub.utils").setLevel(logging.ERROR)
+logging.getLogger("transformers").setLevel(logging.WARNING)
 # Configuration simple et lisible des logs
 logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
 logger = logging.getLogger(__name__)
