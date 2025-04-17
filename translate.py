@@ -4,14 +4,14 @@ import os
 import logging
 import concurrent.futures
 from openai import OpenAI
-from utils import config  # ✅ Ajout
+from utils import config  # ✅ Added
 
-# Configuration du logger
+# Logger configuration
 logger = logging.getLogger(__name__)
 for lib in ["httpx", "httpcore", "openai", "urllib3", "requests"]:
     logging.getLogger(lib).setLevel(logging.WARNING)
 
-# Clés API initialisées à des valeurs par défaut
+# Default API keys
 deepl_key = ""
 openai_key = ""
 client = None
@@ -23,7 +23,7 @@ def set_api_keys(deepl, openai_api_key):
     client = OpenAI(api_key=openai_key)
 
 def translate_text_deepl(text, target_language):
-    logger.info(f"\n📤 [DeepL] Envoi de la phrase à traduire ({target_language}) :\n{text}")
+    logger.info(f"\n📤 [DeepL] Sending text to translate ({target_language}):\n{text}")
     url = "https://api-free.deepl.com/v2/translate"
     headers = {
         "Authorization": f"DeepL-Auth-Key {deepl_key}",
@@ -37,24 +37,24 @@ def translate_text_deepl(text, target_language):
     if response.status_code == 200:
         result = response.json()
         translation = result['translations'][0]['text']
-        logger.info(f"\n📥 [DeepL] Traduction reçue :\n + {translation}")
+        logger.info(f"\n📥 [DeepL] Translation received:\n{translation}")
         return translation
     else:
         raise Exception(f"DeepL API error: {response.status_code} {response.text}")
 
 def translate_text_openai(text, target_language):
-    logger.info(f"\n📤 [OpenAI] Envoi de la phrase à traduire ({target_language}) :\n{text}")
+    logger.info(f"\n📤 [OpenAI] Sending text to translate ({target_language}):\n{text}")
     prompt = (
-        "Attention : la transcription automatique peut contenir des erreurs. "
-        "Veillez à ce que la phrase traduite soit cohérente dans son contexte, "
-        "en corrigeant les éventuelles coquilles si nécessaire. "
-        "Assurez-vous que la traduction est précise et préserve le sens original. "
-        "Ne fournissez aucun commentaire, explication ou formatage supplémentaire. "
-        f"La traduction doit être en {target_language} :\n\n{text}"
+        "Note: The automatic transcription may contain errors. "
+        "Please ensure the translated sentence makes sense in context, "
+        "correcting any mistakes as needed. "
+        "Provide an accurate translation that preserves the original meaning, "
+        "without any additional comments or formatting. "
+        f"The translation should be in {target_language}:\n\n{text}"
     )
 
     messages = [
-        {"role": "assistant", "content": "Vous êtes un traducteur très compétent."},
+        {"role": "assistant", "content": "You are a highly skilled translator."},
         {"role": "user", "content": prompt}
     ]
 
@@ -64,22 +64,22 @@ def translate_text_openai(text, target_language):
         reasoning_effort="low"
     )
     translation = response.choices[0].message.content
-    logger.info(f"\n📥 [OpenAI] Traduction reçue :\n{translation}")
+    logger.info(f"\n📥 [OpenAI] Translation received:\n{translation}")
     return translation
 
 def translate_text_o3(text, target_language):
-    logger.info(f"\n📤 [O3] Envoi de la phrase à traduire ({target_language}) :\n{text}")
+    logger.info(f"\n📤 [O3] Sending text to translate ({target_language}):\n{text}")
     prompt = (
-        "Attention : la transcription automatique peut contenir des erreurs. "
-        "Veillez à ce que la phrase traduite soit cohérente dans son contexte, "
-        "en corrigeant les éventuelles coquilles si nécessaire. "
-        "Assurez-vous que la traduction est précise et préserve le sens original. "
-        "Ne fournissez aucun commentaire, explication ou formatage supplémentaire. "
-        f"La traduction doit être en {target_language} :\n\n{text}"
+        "Note: The automatic transcription may contain errors. "
+        "Please ensure the translated sentence makes sense in context, "
+        "correcting any mistakes as needed. "
+        "Provide an accurate translation that preserves the original meaning, "
+        "without any additional comments or formatting. "
+        f"The translation should be in {target_language}:\n\n{text}"
     )
 
     messages = [
-        {"role": "assistant", "content": "Vous êtes un traducteur très compétent."},
+        {"role": "assistant", "content": "You are a highly skilled translator."},
         {"role": "user", "content": prompt}
     ]
 
@@ -89,7 +89,7 @@ def translate_text_o3(text, target_language):
         reasoning_effort="low"
     )
     translation = response.choices[0].message.content
-    logger.info(f"\n📥 [O3] Traduction reçue :\n{translation}")
+    logger.info(f"\n📥 [O3] Translation received:\n{translation}")
     return translation
 
 def verify_translation(segment, target_language):
@@ -132,7 +132,7 @@ def translate_srt_file(srt_path, target_language, service='openai', mode='batche
     :return: Tuple containing translated file path and translated content
     """
     if use_threading is None:
-        use_threading = config.use_threading  # ✅ lire depuis la config si non spécifié
+        use_threading = config.use_threading
 
     if use_threading and mode == 'threaded':
         return translate_srt_file_threaded(srt_path, target_language, service)
@@ -167,21 +167,13 @@ def translate_srt_file_threaded(srt_path, target_language, service, max_workers=
                 else:
                     segment_data.append((segment_number, timecodes, "", False))
 
-        future_index = 0
         translated_segments = []
-
-        for segment_info in segment_data:
-            segment_number, timecodes, text, needs_translation = segment_info
-            if needs_translation:
-                translated_text = futures[future_index].result()
-                future_index += 1
-                translated_segment = f"{segment_number}\n{timecodes}\n{translated_text}"
+        for idx, (segment_number, timecodes, text, needs) in enumerate(segment_data):
+            if needs:
+                translation = futures[idx].result()
+                translated_segments.append(f"{segment_number}\n{timecodes}\n{translation}")
             else:
-                if text:
-                    translated_segment = f"{segment_number}\n{timecodes}\n{text}"
-                else:
-                    translated_segment = f"{segment_number}\n{timecodes}"
-            translated_segments.append(translated_segment)
+                translated_segments.append(f"{segment_number}\n{timecodes}\n{text}")
 
     translated_content = '\n\n'.join(translated_segments)
     translated_path = srt_path.replace('.srt', f'_translated_{target_language}.srt')
@@ -194,8 +186,8 @@ def translate_srt_file_batched(srt_path, target_language, service, batch_size=10
     translated_content = ""
 
     for i in range(0, len(segments), batch_size):
-        batch_segments = segments[i:i + batch_size]
-        batch_text = "\n\n".join(batch_segments)
+        batch = segments[i:i + batch_size]
+        batch_text = "\n\n".join(batch)
 
         if service.lower() in ("o3", "o3-mini"):
             translated_batch = translate_text_o3(batch_text, target_language)
@@ -204,11 +196,7 @@ def translate_srt_file_batched(srt_path, target_language, service, batch_size=10
                 translated_batch = translate_text_o3(batch_text, target_language)
                 retries -= 1
         elif service.lower() == "deepl":
-            batch_translated_segments = []
-            for segment in batch_segments:
-                translated_segment = translate_text_deepl(segment, target_language)
-                batch_translated_segments.append(translated_segment)
-            translated_batch = "\n\n".join(batch_translated_segments)
+            translated_batch = "\n\n".join(translate_text_deepl(seg, target_language) for seg in batch)
         else:
             translated_batch = translate_text_openai(batch_text, target_language)
 
