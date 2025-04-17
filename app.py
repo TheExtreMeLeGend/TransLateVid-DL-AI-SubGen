@@ -11,6 +11,8 @@ from tkinter import ttk
 from tkinter.ttk import Combobox
 import os
 import logging
+from PIL import Image, ImageTk
+import webbrowser
 
 # Supprimer tous les logs inutiles Hugging Face
 logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
@@ -41,6 +43,59 @@ from utils import setup_logger, config, command_queue, open_file, clear_log_file
 from ui_components import ProgressWindow, ResultDialog
 # Import both processors - just once
 from video_processor import VideoProcessor, ThreadedVideoProcessor
+from video_processor import VideoProcessor
+
+
+
+# Définition des couleurs
+COLORS = {
+    "primary": "#3f51b5",      # Bleu principal
+    "primary_dark": "#303f9f", # Bleu foncé pour survol
+    "secondary": "#ff4081",    # Rose accentuation
+    "background": "#f5f5f7",   # Gris très clair
+    "card_bg": "#ffffff",      # Blanc pour les cartes
+    "text": "#212121",         # Texte principal presque noir
+    "text_secondary": "#757575", # Texte secondaire gris
+    "success": "#4caf50",      # Vert pour succès
+    "warning": "#ff9800",      # Orange pour avertissements
+    "error": "#f44336",        # Rouge pour erreurs
+    "border": "#e0e0e0"        # Gris clair pour bordures
+}
+
+class ModernButton(tk.Button):
+    """Bouton modernisé avec effets de survol"""
+    def __init__(self, master=None, **kwargs):
+        self.bg_color = kwargs.pop('bg', COLORS["primary"])
+        self.hover_color = kwargs.pop('hover_color', COLORS["primary_dark"])
+        kwargs['bg'] = self.bg_color
+        kwargs['activebackground'] = self.hover_color
+        kwargs['bd'] = kwargs.get('bd', 0)
+        kwargs['relief'] = kwargs.get('relief', 'flat')
+        kwargs['fg'] = kwargs.get('fg', 'white')
+        kwargs['activeforeground'] = kwargs.get('activeforeground', 'white')
+        kwargs['font'] = kwargs.get('font', ('Segoe UI', 10))
+        super().__init__(master, **kwargs)
+        
+        self.bind("<Enter>", self.on_enter)
+        self.bind("<Leave>", self.on_leave)
+    
+    def on_enter(self, e):
+        self['bg'] = self.hover_color
+        
+    def on_leave(self, e):
+        self['bg'] = self.bg_color
+
+class ModernFrame(tk.Frame):
+    """Frame avec bordure et ombre pour style carte"""
+    def __init__(self, master=None, **kwargs):
+        kwargs['bg'] = kwargs.get('bg', COLORS["card_bg"])
+        kwargs['bd'] = kwargs.get('bd', 1)
+        kwargs['relief'] = kwargs.get('relief', 'solid')
+        kwargs['highlightbackground'] = kwargs.get('highlightbackground', COLORS["border"])
+        kwargs['highlightthickness'] = kwargs.get('highlightthickness', 1)
+        kwargs['padx'] = kwargs.get('padx', 15)
+        kwargs['pady'] = kwargs.get('pady', 15)
+        super().__init__(master, **kwargs)
 
 class SRTTranslatorApp:
     """Application principale pour traduire et traiter les vidéos."""
@@ -48,11 +103,27 @@ class SRTTranslatorApp:
     def __init__(self):
         """Initialise l'interface utilisateur de l'application."""
         self.root = tk.Tk()
-        self.root.title("SRT Translator and Video Processor")
-        self.root.geometry("850x850")
+        self.root.title("SRT Translator Pro")
+        self.root.geometry("950x750")
+        self.root.configure(bg=COLORS["background"])
+        self.root.minsize(950, 850)
+        
+        # Configuration de la police par défaut
+        self.default_font = ('Segoe UI', 10)
+        
         # Configuration du thème
         style = ttk.Style(self.root)
         style.theme_use("clam")
+        
+        # Configure les styles personnalisés
+        style.configure("TFrame", background=COLORS["background"])
+        style.configure("Card.TFrame", background=COLORS["card_bg"])
+        style.configure("TLabel", background=COLORS["card_bg"], font=self.default_font)
+        style.configure("Header.TLabel", font=("Segoe UI", 16, "bold"))
+        style.configure("Subheader.TLabel", font=("Segoe UI", 12))
+        style.configure("TEntry", font=self.default_font)
+        style.configure("TCheckbutton", background=COLORS["card_bg"], font=self.default_font)
+        style.configure("TCombobox", font=self.default_font)
 
         # IMPORTANT: Initialize use_threading before _create_ui is called
         self.use_threading = tk.BooleanVar(value=True)  # Option pour activer/désactiver le multi-threading
@@ -80,46 +151,274 @@ class SRTTranslatorApp:
 
     def _create_ui(self):
         """Crée l'interface utilisateur principale."""
-        main_frame = tk.Frame(self.root, bg="#ffffff", padx=20, pady=20)
-        main_frame.pack(fill="both", expand=True)
+        # Conteneur principal avec padding
+        main_container = tk.Frame(self.root, bg=COLORS["background"], padx=20, pady=20)
+        main_container.pack(fill="both", expand=True)
+        
+        # Section d'en-tête avec logo et titre
+        header_frame = tk.Frame(main_container, bg=COLORS["background"])
+        header_frame.pack(fill="x", pady=(0, 20))
+        
+        # Logo et titre
+        try:
+            # Remplacez par le chemin de votre logo si vous en avez un
+            logo_img = Image.open("assets/logo.png").resize((48, 48))
+            logo_photo = ImageTk.PhotoImage(logo_img)
+            logo_label = tk.Label(header_frame, image=logo_photo, bg=COLORS["background"])
+            logo_label.image = logo_photo  # Garde une référence
+            logo_label.pack(side="left", padx=(0, 15))
+        except:
+            # Si pas d'image, on met juste un placeholder coloré
+            logo_frame = tk.Frame(header_frame, width=48, height=48, bg=COLORS["primary"])
+            logo_frame.pack(side="left", padx=(0, 15))
 
-        tk.Label(main_frame, text="SRT Translator and Video Processor", font=("Helvetica", 16, "bold"), bg="#ffffff").grid(row=0, column=0, columnspan=2, pady=(10, 20))
-
-        labels_entries = [
-            ("Enter video URL:", "url_entry"),
-            ("Enter DeepL API Key:", "deepl_key_entry"),
-            ("Enter OpenAI API Key:", "openai_key_entry")
-        ]
-
-        for i, (label, attr) in enumerate(labels_entries, start=1):
-            tk.Label(main_frame, text=label, bg="#ffffff", font=("Helvetica", 10)).grid(row=i, column=0, sticky="w", pady=5)
-            setattr(self, attr, tk.Entry(main_frame, font=("Helvetica", 10), width=40))
-            getattr(self, attr).grid(row=i, column=1, pady=5, padx=(10, 0))
-
-        tk.Label(main_frame, text="Select target language:", bg="#ffffff", font=("Helvetica", 10)).grid(row=4, column=0, sticky="w", pady=(15, 5))
-        self.language_combobox = Combobox(main_frame, values=[
-            "FR - French", "EN - English", "ES - Spanish", "DE - German", "IT - Italian",
-            "ZH - Chinese", "JA - Japanese", "RU - Russian", "NL - Dutch",
-            "PT - Portuguese", "AR - Arabic", "HI - Hindi", "KO - Korean", "TR - Turkish"
-        ], font=("Helvetica", 10), state="readonly", width=37)
-        self.language_combobox.grid(row=4, column=1, pady=(15, 5), padx=(10, 0))
-
-        tk.Label(main_frame, text="Select translation service:", bg="#ffffff", font=("Helvetica", 10)).grid(row=5, column=0, sticky="w", pady=(15, 5))
-        self.service_combobox = Combobox(main_frame, values=["ChatGPT", "DeepL"], font=("Helvetica", 10), state="readonly", width=37)
-        self.service_combobox.grid(row=5, column=1, pady=(15, 5), padx=(10, 0))
-
-        tk.Label(main_frame, text="Select Whisper Model:", bg="#ffffff", font=("Helvetica", 10)).grid(row=6, column=0, sticky="w", pady=(15, 5))
-        whisper_frame = tk.Frame(main_frame, bg="#ffffff")
-        whisper_frame.grid(row=6, column=1, pady=(15, 5), padx=(10, 0), sticky="w")
-
+        title_frame = tk.Frame(header_frame, bg=COLORS["background"])
+        title_frame.pack(side="left", fill="y")
+        
+        tk.Label(
+            title_frame, 
+            text="SRT Translator Pro", 
+            font=("Segoe UI", 22, "bold"), 
+            fg=COLORS["primary"], 
+            bg=COLORS["background"]
+        ).pack(anchor="w")
+        
+        tk.Label(
+            title_frame, 
+            text="Traduction et traitement vidéo avec IA", 
+            font=("Segoe UI", 12), 
+            fg=COLORS["text_secondary"], 
+            bg=COLORS["background"]
+        ).pack(anchor="w")
+        
+        # Cartes de contenu
+        content_frame = tk.Frame(main_container, bg=COLORS["background"])
+        content_frame.pack(fill="both", expand=True, pady=(0, 20))
+        
+        # Première colonne
+        left_column = tk.Frame(content_frame, bg=COLORS["background"])
+        left_column.pack(side="left", fill="both", expand=True, padx=(0, 10))
+        
+        # Deuxième colonne
+        right_column = tk.Frame(content_frame, bg=COLORS["background"])
+        right_column.pack(side="right", fill="both", expand=True, padx=(10, 0))
+        
+        # --- SECTION SOURCES VIDÉO ---
+        source_card = ModernFrame(left_column)
+        source_card.pack(fill="x", pady=(0, 20))
+        
+        tk.Label(
+            source_card, 
+            text="Source Vidéo", 
+            font=("Segoe UI", 14, "bold"), 
+            bg=COLORS["card_bg"]
+        ).pack(anchor="w", pady=(0, 15))
+        
+        # URL d'entrée avec icône
+        url_frame = tk.Frame(source_card, bg=COLORS["card_bg"])
+        url_frame.pack(fill="x", pady=(0, 15))
+        
+        tk.Label(
+            url_frame, 
+            text="URL de la vidéo:", 
+            font=self.default_font, 
+            bg=COLORS["card_bg"]
+        ).pack(anchor="w")
+        
+        url_input_frame = tk.Frame(url_frame, bg=COLORS["card_bg"])
+        url_input_frame.pack(fill="x", pady=(5, 0))
+        
+        self.url_entry = tk.Entry(
+            url_input_frame, 
+            font=self.default_font, 
+            bd=1, 
+            relief="solid"
+        )
+        self.url_entry.pack(side="left", fill="x", expand=True)
+        
+        browse_btn = ModernButton(
+            url_input_frame, 
+            text="Parcourir", 
+            command=self._select_local_file,
+            font=self.default_font,
+            padx=10
+        )
+        browse_btn.pack(side="right", padx=(10, 0))
+        
+        # --- SECTION CONFIGURATION ---
+        config_card = ModernFrame(left_column)
+        config_card.pack(fill="x")
+        
+        tk.Label(
+            config_card, 
+            text="Configuration", 
+            font=("Segoe UI", 14, "bold"), 
+            bg=COLORS["card_bg"]
+        ).pack(anchor="w", pady=(0, 15))
+        
+        # Section des API Keys
+        api_frame = tk.Frame(config_card, bg=COLORS["card_bg"])
+        api_frame.pack(fill="x", pady=(0, 15))
+        
+        tk.Label(
+            api_frame, 
+            text="Clés API", 
+            font=("Segoe UI", 12), 
+            bg=COLORS["card_bg"], 
+            fg=COLORS["primary"]
+        ).pack(anchor="w", pady=(0, 5))
+        
+        # DeepL API Key
+        tk.Label(
+            api_frame, 
+            text="Clé API DeepL:", 
+            bg=COLORS["card_bg"],
+            font=self.default_font
+        ).pack(anchor="w")
+        
+        self.deepl_key_entry = tk.Entry(
+            api_frame, 
+            font=self.default_font, 
+            bd=1, 
+            relief="solid", 
+            show="•"
+        )
+        self.deepl_key_entry.pack(fill="x", pady=(5, 10))
+        
+        # OpenAI API Key
+        tk.Label(
+            api_frame, 
+            text="Clé API OpenAI:", 
+            bg=COLORS["card_bg"],
+            font=self.default_font
+        ).pack(anchor="w")
+        
+        self.openai_key_entry = tk.Entry(
+            api_frame, 
+            font=self.default_font, 
+            bd=1, 
+            relief="solid", 
+            show="•"
+        )
+        self.openai_key_entry.pack(fill="x", pady=5)
+        
+        # Gestion des langues
+        language_frame = tk.Frame(config_card, bg=COLORS["card_bg"])
+        language_frame.pack(fill="x", pady=(0, 15))
+        
+        tk.Label(
+            language_frame, 
+            text="Langue et Traduction", 
+            font=("Segoe UI", 12), 
+            bg=COLORS["card_bg"], 
+            fg=COLORS["primary"]
+        ).pack(anchor="w", pady=(0, 5))
+        
+        # Langue cible
+        tk.Label(
+            language_frame, 
+            text="Langue cible:", 
+            bg=COLORS["card_bg"],
+            font=self.default_font
+        ).pack(anchor="w")
+        
+        self.language_combobox = ttk.Combobox(
+            language_frame, 
+            values=[
+                "FR - French", "EN - English", "ES - Spanish", "DE - German", "IT - Italian",
+                "ZH - Chinese", "JA - Japanese", "RU - Russian", "NL - Dutch",
+                "PT - Portuguese", "AR - Arabic", "HI - Hindi", "KO - Korean", "TR - Turkish"
+            ], 
+            state="readonly", 
+            font=self.default_font
+        )
+        self.language_combobox.pack(fill="x", pady=(5, 10))
+        
+        # Service de traduction
+        tk.Label(
+            language_frame, 
+            text="Service de traduction:", 
+            bg=COLORS["card_bg"],
+            font=self.default_font
+        ).pack(anchor="w")
+        
+        self.service_combobox = ttk.Combobox(
+            language_frame, 
+            values=["ChatGPT", "DeepL"], 
+            state="readonly", 
+            font=self.default_font
+        )
+        self.service_combobox.pack(fill="x", pady=5)
+        
+        # --- SECTION AVANCÉE (Colonne de droite) ---
+        advanced_card = ModernFrame(right_column)
+        advanced_card.pack(fill="x", pady=(0, 20))
+        
+        tk.Label(
+            advanced_card, 
+            text="Paramètres Avancés", 
+            font=("Segoe UI", 14, "bold"), 
+            bg=COLORS["card_bg"]
+        ).pack(anchor="w", pady=(0, 15))
+        
+        # Configuration Whisper
+        whisper_frame = tk.Frame(advanced_card, bg=COLORS["card_bg"])
+        whisper_frame.pack(fill="x", pady=(0, 15))
+        
+        tk.Label(
+            whisper_frame, 
+            text="Modèle Whisper", 
+            font=("Segoe UI", 12), 
+            bg=COLORS["card_bg"], 
+            fg=COLORS["primary"]
+        ).pack(anchor="w", pady=(0, 5))
+        
+        # Option GPU
+        gpu_frame = tk.Frame(whisper_frame, bg=COLORS["card_bg"])
+        gpu_frame.pack(fill="x", pady=(5, 10))
+        
         self.gpu_var = tk.BooleanVar(value=config.is_cuda_available())
-        tk.Checkbutton(whisper_frame, text="Utiliser le GPU (NVIDIA)", variable=self.gpu_var, bg="#ffffff", font=("Helvetica", 10)).pack(side="left")
-        self.whisper_model_combobox = Combobox(whisper_frame, values=[
-            "tiny", "base", "small", "medium", "large", "large-v3-turbo"
-        ], font=("Helvetica", 10), state="readonly", width=20)
-        self.whisper_model_combobox.pack(side="left", padx=(10, 0))
-        self.whisper_model_combobox.set(config.whisper_model)
-
+        gpu_check = ttk.Checkbutton(
+            gpu_frame, 
+            text="Utiliser le GPU (NVIDIA)", 
+            variable=self.gpu_var,
+            style="TCheckbutton"
+        )
+        gpu_check.pack(side="left")
+        
+        # Si CUDA est indisponible
+        if not config.is_cuda_available():
+            disabled_label = tk.Label(
+                gpu_frame, 
+                text="(CUDA non disponible)", 
+                fg=COLORS["error"],
+                bg=COLORS["card_bg"],
+                font=("Segoe UI", 9, "italic")
+            )
+            disabled_label.pack(side="left", padx=(5, 0))
+        
+        # Sélection du modèle
+        tk.Label(
+            whisper_frame, 
+            text="Sélectionnez le modèle Whisper:", 
+            bg=COLORS["card_bg"],
+            font=self.default_font
+        ).pack(anchor="w")
+        
+        model_frame = tk.Frame(whisper_frame, bg=COLORS["card_bg"])
+        model_frame.pack(fill="x", pady=5)
+        
+        self.whisper_model_combobox = ttk.Combobox(
+            model_frame, 
+            values=[
+                "tiny", "base", "small", "medium", "large", "large-v3-turbo"
+            ], 
+            state="readonly", 
+            font=self.default_font
+        )
+        self.whisper_model_combobox.pack(side="left", fill="x", expand=True)
+        
+        # Tooltip sur les ressources
         self.model_resources = {
             "tiny": {"RAM": "2GB", "VRAM": "1GB"},
             "base": {"RAM": "4GB", "VRAM": "2GB"},
@@ -128,36 +427,160 @@ class SRTTranslatorApp:
             "large": {"RAM": "16GB", "VRAM": "8GB"},
             "large-v3-turbo": {"RAM": "20GB", "VRAM": "10GB"}
         }
-
-        self.resource_label = tk.Label(main_frame, text="", bg="#ffffff", font=("Helvetica", 9, "italic"))
-        self.resource_label.grid(row=7, column=1, sticky="w", pady=(0, 10), padx=(10, 0))
-
+        
+        info_frame = tk.Frame(whisper_frame, bg=COLORS["card_bg"])
+        info_frame.pack(fill="x", pady=(5, 0))
+        
+        self.resource_label = tk.Label(
+            info_frame, 
+            text="", 
+            bg=COLORS["card_bg"], 
+            font=("Segoe UI", 9, "italic"),
+            fg=COLORS["text_secondary"]
+        )
+        self.resource_label.pack(anchor="w")
+        
         def update_resource_info(event):
             model = self.whisper_model_combobox.get()
             info = self.model_resources.get(model, {"RAM": "?", "VRAM": "?"})
-            self.resource_label.config(text=f"Estimated: RAM {info['RAM']} / VRAM {info['VRAM']}")
-
-        self.whisper_model_combobox.bind("<<ComboboxSelected>>", update_resource_info)
-        update_resource_info(None)
-
-        # Ajout de l'option de multi-threading
-        threading_frame = tk.Frame(main_frame, bg="#ffffff")
-        threading_frame.grid(row=8, column=0, columnspan=2, pady=(15, 5), sticky="w")
+            self.resource_label.config(text=f"Ressources estimées: RAM {info['RAM']} / VRAM {info['VRAM']}")
         
-        tk.Checkbutton(
-            threading_frame, 
-            text="Activer le traitement multi-thread (plus rapide mais consomme plus de ressources)", 
-            variable=self.use_threading, 
+        self.whisper_model_combobox.bind("<<ComboboxSelected>>", update_resource_info)
+        
+        # Options de performance
+        perf_frame = tk.Frame(advanced_card, bg=COLORS["card_bg"])
+        perf_frame.pack(fill="x")
+        
+        tk.Label(
+            perf_frame, 
+            text="Performance", 
+            font=("Segoe UI", 12), 
+            bg=COLORS["card_bg"], 
+            fg=COLORS["primary"]
+        ).pack(anchor="w", pady=(0, 5))
+        
+        # Option multi-thread
+        self.use_threading = tk.BooleanVar(value=True)
+        thread_check = ttk.Checkbutton(
+            perf_frame, 
+            text="Activer le multi-thread (plus rapide mais consomme plus de ressources)", 
+            variable=self.use_threading,
             command=self._update_processor,
-            bg="#ffffff", 
-            font=("Helvetica", 10)
-        ).pack(side="left", padx=(10, 0))
-
-        tk.Button(main_frame, text="Process Video", command=self._process_video, font=("Helvetica", 12, "bold"), bg="#2196F3", fg="white", padx=20, pady=10).grid(row=9, column=0, columnspan=2, pady=(30, 10))
-
+            style="TCheckbutton"
+        )
+        thread_check.pack(anchor="w", pady=5)
+        
+        # --- SECTION STATUT ET LOG ---
+        status_card = ModernFrame(right_column)
+        status_card.pack(fill="both", expand=True)
+        
+        tk.Label(
+            status_card, 
+            text="État et Log", 
+            font=("Segoe UI", 14, "bold"), 
+            bg=COLORS["card_bg"]
+        ).pack(anchor="w", pady=(0, 15))
+        
+        # Zone d'état du système
+        system_frame = tk.Frame(status_card, bg=COLORS["card_bg"])
+        system_frame.pack(fill="x", pady=(0, 15))
+        
+        # État GPU avec icône
+        gpu_status_frame = tk.Frame(system_frame, bg=COLORS["card_bg"])
+        gpu_status_frame.pack(fill="x", pady=5)
+        
+        gpu_icon_color = COLORS["success"] if config.is_cuda_available() else COLORS["error"]
+        gpu_icon = tk.Canvas(gpu_status_frame, width=12, height=12, bg=COLORS["card_bg"], highlightthickness=0)
+        gpu_icon.create_oval(2, 2, 10, 10, fill=gpu_icon_color, outline="")
+        gpu_icon.pack(side="left", padx=(0, 5))
+        
+        gpu_text = "GPU disponible: " + (config.get_gpu_name() if config.is_cuda_available() else "Non disponible")
+        gpu_status = tk.Label(
+            gpu_status_frame, 
+            text=gpu_text, 
+            bg=COLORS["card_bg"], 
+            font=self.default_font
+        )
+        gpu_status.pack(side="left")
+        
+        # Fenêtre de log
+        log_label = tk.Label(
+            status_card, 
+            text="Derniers logs:", 
+            bg=COLORS["card_bg"], 
+            font=self.default_font
+        )
+        log_label.pack(anchor="w")
+        
+        log_frame = tk.Frame(status_card, bg=COLORS["card_bg"], bd=1, relief="solid")
+        log_frame.pack(fill="both", expand=True, pady=(5, 0))
+        
+        self.log_text = tk.Text(
+            log_frame, 
+            font=("Consolas", 9), 
+            bg="#f8f9fa", 
+            height=10,
+            wrap="word",
+            state="disabled"
+        )
+        self.log_text.pack(fill="both", expand=True)
+        
+        # Scrollbar pour le log
+        log_scrollbar = ttk.Scrollbar(self.log_text, orient="vertical", command=self.log_text.yview)
+        log_scrollbar.pack(side="right", fill="y")
+        self.log_text.config(yscrollcommand=log_scrollbar.set)
+        
+        # Configurer le handler de logging pour afficher dans la UI
+        class TextHandler(logging.Handler):
+            def __init__(self, text_widget):
+                super().__init__()
+                self.text_widget = text_widget
+                
+            def emit(self, record):
+                msg = self.format(record)
+                
+                def append():
+                    self.text_widget.configure(state='normal')
+                    self.text_widget.insert('end', msg + '\n')
+                    self.text_widget.see('end')
+                    self.text_widget.configure(state='disabled')
+                
+                # Schedule to be run in the main thread
+                self.text_widget.after(0, append)
+        
+        # Ajouter le handler personnalisé
+        text_handler = TextHandler(self.log_text)
+        formatter = logging.Formatter('[%(levelname)s] %(message)s')
+        text_handler.setFormatter(formatter)
+        
+        # Ajouter l'handler au logger
+        logger = logging.getLogger()
+        logger.addHandler(text_handler)
+        
+        # --- BOUTON D'ACTION ---
+        action_frame = tk.Frame(main_container, bg=COLORS["background"])
+        action_frame.pack(fill="x", pady=(20, 0))
+        
+        process_btn = ModernButton(
+            action_frame, 
+            text="Démarrer le Traitement", 
+            command=lambda: self._process_video(),
+            font=("Segoe UI", 12, "bold"),
+            padx=20, 
+            pady=12,
+            bg=COLORS["secondary"],
+            hover_color="#ff5a92"
+        )
+        process_btn.pack()
+        
         self._create_menu()
         self._load_defaults()
-        self.main_frame = main_frame
+        
+        # Message initial
+        logging.info("Application SRT Translator Pro démarrée et prête à l'emploi")
+        
+        # Appeler la mise à jour des ressources
+        update_resource_info(None)
 
     def _create_menu(self):
         """Crée le menu de l'application."""
@@ -165,27 +588,27 @@ class SRTTranslatorApp:
         
         # Menu Fichier
         file_menu = tk.Menu(menubar, tearoff=0)
-        file_menu.add_command(label="Select Video File", command=self._select_local_file)
+        file_menu.add_command(label="Sélectionner un fichier vidéo", command=self._select_local_file)
         file_menu.add_separator()
-        file_menu.add_command(label="Exit", command=self.root.quit)
-        menubar.add_cascade(label="File", menu=file_menu)
+        file_menu.add_command(label="Quitter", command=self.root.quit)
+        menubar.add_cascade(label="Fichier", menu=file_menu)
         
         # Menu Logs
         logs_menu = tk.Menu(menubar, tearoff=0)
-        logs_menu.add_command(label="Open Log File", command=lambda: open_file(os.path.join('logs', 'app.log')))
-        logs_menu.add_command(label="Clear Logs", command=clear_log_file)
-        menubar.add_cascade(label="Logs", menu=logs_menu)
+        logs_menu.add_command(label="Ouvrir le fichier journal", command=lambda: open_file(os.path.join('logs', 'app.log')))
+        logs_menu.add_command(label="Effacer les journaux", command=clear_log_file)
+        menubar.add_cascade(label="Journaux", menu=logs_menu)
         
         # Menu Settings
         settings_menu = tk.Menu(menubar, tearoff=0)
-        settings_menu.add_checkbutton(label="Use Multi-Threading", variable=self.use_threading, command=self._update_processor)
-        menubar.add_cascade(label="Settings", menu=settings_menu)
+        settings_menu.add_checkbutton(label="Utiliser le multi-threading", variable=self.use_threading, command=self._update_processor)
+        menubar.add_cascade(label="Paramètres", menu=settings_menu)
         
         # Menu Aide
         help_menu = tk.Menu(menubar, tearoff=0)
-        help_menu.add_command(label="About", command=self._show_about)
-        help_menu.add_command(label="Help", command=self._show_help)
-        menubar.add_cascade(label="Help", menu=help_menu)
+        help_menu.add_command(label="À propos", command=self._show_about)
+        help_menu.add_command(label="Aide", command=self._show_help)
+        menubar.add_cascade(label="Aide", menu=help_menu)
         
         self.root.config(menu=menubar)
     
@@ -200,6 +623,8 @@ class SRTTranslatorApp:
             self.language_combobox.set(config.default_language)
         if not self.service_combobox.get():
             self.service_combobox.set(config.default_service)
+        if not self.whisper_model_combobox.get():
+            self.whisper_model_combobox.set(config.whisper_model)
     
     def _setup_command_listener(self):
         """Configure le listener de commandes venant du thread de traitement."""
@@ -276,15 +701,37 @@ class SRTTranslatorApp:
 
         # Créer la fenêtre de progression
         self.progress_window = ProgressWindow(self.root, "Traitement de la vidéo")
-        self.progress_window.update_progress_ui(0, "Initialisation du traitement...")
+        
+        # Modifier cette ligne pour utiliser la méthode correcte de votre ProgressWindow
+        # Au lieu de update_status, utilisez la méthode qui existe réellement
+        # Par exemple, si vous avez une méthode update_progress:
+        # self.progress_window.update_progress("Initialisation...", 0)
+        # 
+        # Si vous n'avez pas de méthode pour mettre à jour le statut, supprimez cette ligne:
+        # self.progress_window.update_status("Initialisation...")
         
         # Démarrer le traitement
-        self.processor.process_video(url, video_path, target_language, translation_service, use_gpu)
+        if video_path:
+            logging.info(f"Traitement d'un fichier vidéo local: {os.path.basename(video_path)}")
+            self.processor.process_video(None, video_path, target_language, translation_service, use_gpu)
+        else:
+            logging.info(f"Traitement d'une vidéo à partir de l'URL: {url}")
+            self.processor.process_video(url, None, target_language, translation_service, use_gpu)
+
     
     def _select_local_file(self):
         """Sélectionne un fichier vidéo local à traiter."""
-        file_path = filedialog.askopenfilename(filetypes=[("Video files", "*.mp4;*.mkv;*.avi;*.mov")])
+        file_path = filedialog.askopenfilename(
+            filetypes=[("Fichiers vidéo", "*.mp4 *.mkv *.avi *.mov *.webm")],
+            title="Sélectionner une vidéo"
+        )
         if file_path:
+            # Mettre le chemin dans l'interface
+            self.url_entry.delete(0, tk.END)
+            self.url_entry.insert(0, "Fichier local: " + os.path.basename(file_path))
+            logging.info(f"Fichier vidéo sélectionné: {file_path}")
+            
+            # Traiter la vidéo
             self._process_video(video_path=file_path)
     
     def _handle_processing_done(self, video_folder):
@@ -306,7 +753,11 @@ class SRTTranslatorApp:
         """Gère l'annulation du traitement."""
         try:
             self.progress_window.close()
-            messagebox.showinfo("Traitement annulé", "Le traitement a été annulé par l'utilisateur.")
+            messagebox.showinfo(
+                "Traitement annulé", 
+                "Le traitement a été annulé par l'utilisateur.",
+                icon="info"
+            )
         except Exception as e:
             logging.error(f"Erreur lors de l'annulation: {e}")
     
@@ -314,38 +765,284 @@ class SRTTranslatorApp:
         """Gère une erreur de traitement."""
         try:
             self.progress_window.close()
-            messagebox.showerror("Erreur", f"Une erreur s'est produite : {error_message}")
+            messagebox.showerror(
+                "Erreur de traitement", 
+                f"Une erreur s'est produite lors du traitement :\n\n{error_message}",
+                icon="error"
+            )
         except Exception as e:
             logging.error(f"Erreur lors de l'affichage de l'erreur: {e}")
     
     def _show_about(self):
-        """Affiche la boîte de dialogue À propos."""
-        messagebox.showinfo(
-            "À propos", 
-            "SRT Translator and Video Processor\n\n"
-            "Version 1.1\n\n"
-            "Une application pour télécharger des vidéos, extraire l'audio, "
-            "séparer les pistes audio, transcrire et traduire les sous-titres.\n\n"
-            "Mode multi-thread ajouté pour des performances améliorées."
+        """Affiche la boîte de dialogue À propos avec style moderne."""
+        about_window = tk.Toplevel(self.root)
+        about_window.title("À propos de SRT Translator Pro")
+        about_window.geometry("500x400")
+        about_window.resizable(False, False)
+        about_window.configure(bg=COLORS["card_bg"])
+        
+        # Centrer la fenêtre
+        about_window.update_idletasks()
+        width = about_window.winfo_width()
+        height = about_window.winfo_height()
+        x = (about_window.winfo_screenwidth() // 2) - (width // 2)
+        y = (about_window.winfo_screenheight() // 2) - (height // 2)
+        about_window.geometry('{}x{}+{}+{}'.format(width, height, x, y))
+        
+        # Contenu avec padding
+        content_frame = tk.Frame(about_window, bg=COLORS["card_bg"], padx=25, pady=25)
+        content_frame.pack(fill="both", expand=True)
+        
+        try:
+            # Logo placeholder - remplacez par votre propre logo
+            logo_img = Image.open("assets/logo.png").resize((80, 80))
+            logo_photo = ImageTk.PhotoImage(logo_img)
+            logo_label = tk.Label(content_frame, image=logo_photo, bg=COLORS["card_bg"])
+            logo_label.image = logo_photo
+            logo_label.pack(pady=(0, 20))
+        except:
+            # Fallback si pas de logo
+            logo_frame = tk.Frame(content_frame, width=80, height=80, bg=COLORS["primary"])
+            logo_frame.pack(pady=(0, 20))
+        
+        # Titre et version
+        tk.Label(
+            content_frame, 
+            text="SRT Translator Pro", 
+            font=("Segoe UI", 18, "bold"), 
+            bg=COLORS["card_bg"], 
+            fg=COLORS["primary"]
+        ).pack()
+        
+        tk.Label(
+            content_frame, 
+            text="Version 1.1", 
+            font=("Segoe UI", 10), 
+            bg=COLORS["card_bg"], 
+            fg=COLORS["text_secondary"]
+        ).pack(pady=(0, 20))
+        
+        # Description
+        description = """Une application avancée pour télécharger des vidéos, extraire l'audio, transcrire et traduire les sous-titres en utilisant la puissance de l'IA.
+
+Fonctionnalités :
+• Téléchargement de vidéos depuis diverses plateformes
+• Extraction et traitement audio intelligent
+• Transcription automatique avec Whisper
+• Traduction avec DeepL et OpenAI
+• Optimisation multi-thread pour des performances accrues
+
+Développée avec Python et tkinter."""
+
+        text_box = tk.Text(
+            content_frame, 
+            font=("Segoe UI", 10), 
+            bg=COLORS["card_bg"],
+            relief="flat",
+            height=10,
+            wrap="word"
         )
+        text_box.insert("1.0", description)
+        text_box.config(state="disabled")
+        text_box.pack(fill="both", expand=True)
+        
+        # Bouton OK pour fermer
+        ok_button = ModernButton(
+            content_frame, 
+            text="Fermer", 
+            command=about_window.destroy,
+            bg=COLORS["primary"],
+            padx=20,
+            pady=5,
+            font=("Segoe UI", 10)
+        )
+        ok_button.pack(pady=(20, 0))
     
     def _show_help(self):
-        """Affiche l'aide de l'application."""
-        help_text = (
-            "Comment utiliser l'application:\n\n"
-            "1. Entrez une URL de vidéo ou sélectionnez un fichier local\n"
-            "2. Configurez les clés API pour DeepL et/ou OpenAI\n"
-            "3. Sélectionnez la langue cible et le service de traduction\n"
-            "4. Activez/désactivez le mode multi-thread selon vos besoins\n"
-            "5. Cliquez sur 'Process Video'\n\n"
-            "Note: Le mode multi-thread est plus rapide mais utilise plus de ressources système."
+        """Affiche l'aide de l'application avec style moderne."""
+        help_window = tk.Toplevel(self.root)
+        help_window.title("Aide - SRT Translator Pro")
+        help_window.geometry("600x500")
+        help_window.configure(bg=COLORS["card_bg"])
+        
+        # Centrer la fenêtre
+        help_window.update_idletasks()
+        width = help_window.winfo_width()
+        height = help_window.winfo_height()
+        x = (help_window.winfo_screenwidth() // 2) - (width // 2)
+        y = (help_window.winfo_screenheight() // 2) - (height // 2)
+        help_window.geometry('{}x{}+{}+{}'.format(width, height, x, y))
+        
+        # Panneau principal
+        main_frame = tk.Frame(help_window, bg=COLORS["card_bg"], padx=25, pady=25)
+        main_frame.pack(fill="both", expand=True)
+        
+        # En-tête
+        tk.Label(
+            main_frame, 
+            text="Guide d'utilisation", 
+            font=("Segoe UI", 16, "bold"), 
+            bg=COLORS["card_bg"], 
+            fg=COLORS["primary"]
+        ).pack(anchor="w", pady=(0, 20))
+        
+        # Zone d'onglets
+        tab_control = ttk.Notebook(main_frame)
+        
+        # Onglet Démarrage rapide
+        quick_start = ttk.Frame(tab_control)
+        tab_control.add(quick_start, text="Démarrage rapide")
+        
+        quick_start_frame = tk.Frame(quick_start, bg=COLORS["card_bg"], padx=15, pady=15)
+        quick_start_frame.pack(fill="both", expand=True)
+        
+        quick_guide = """Comment utiliser SRT Translator Pro:
+
+1. Entrez une URL de vidéo dans le champ ou sélectionnez un fichier local avec le bouton "Parcourir".
+
+2. Configurez les clés API pour DeepL et/ou OpenAI selon le service de traduction que vous souhaitez utiliser.
+
+3. Sélectionnez la langue cible et le service de traduction.
+
+4. Ajustez les paramètres avancés si nécessaire (modèle Whisper, utilisation du GPU, etc.).
+
+5. Cliquez sur "Démarrer le traitement".
+
+6. Suivez la progression dans la fenêtre qui apparaît. Vous pouvez annuler à tout moment si nécessaire."""
+        
+        qs_text = tk.Text(
+            quick_start_frame, 
+            bg=COLORS["card_bg"],
+            relief="flat",
+            wrap="word", 
+            font=("Segoe UI", 10),
+            height=15
         )
-        messagebox.showinfo("Aide", help_text)
+        qs_text.insert("1.0", quick_guide)
+        qs_text.config(state="disabled")
+        qs_text.pack(fill="both", expand=True)
+        
+        # Onglet Paramètres avancés
+        adv_tab = ttk.Frame(tab_control)
+        tab_control.add(adv_tab, text="Paramètres avancés")
+        
+        adv_frame = tk.Frame(adv_tab, bg=COLORS["card_bg"], padx=15, pady=15)
+        adv_frame.pack(fill="both", expand=True)
+        
+        adv_guide = """Paramètres avancés:
+
+• Modèles Whisper:
+  - tiny: Rapide, moins précis, idéal pour les tests (faibles ressources)
+  - base: Bon équilibre vitesse/précision pour les contenus simples
+  - small: Précision améliorée, adapté à la plupart des contenus
+  - medium: Haute précision, recommandé pour les contenus complexes
+  - large: Précision maximale, idéal pour les contenus difficiles
+  - large-v3-turbo: Dernière version, plus rapide et plus précise
+
+• Utilisation GPU:
+  L'option GPU accélère considérablement le traitement mais nécessite une carte NVIDIA compatible CUDA. La quantité de VRAM nécessaire dépend du modèle Whisper choisi.
+
+• Multi-threading:
+  Permet de traiter plusieurs tâches simultanément, ce qui accélère le processus global. Désactivez cette option si vous rencontrez des problèmes de stabilité ou de ressources."""
+        
+        adv_text = tk.Text(
+            adv_frame, 
+            bg=COLORS["card_bg"],
+            relief="flat",
+            wrap="word", 
+            font=("Segoe UI", 10),
+            height=15
+        )
+        adv_text.insert("1.0", adv_guide)
+        adv_text.config(state="disabled")
+        adv_text.pack(fill="both", expand=True)
+        
+        # Onglet Dépannage
+        troubleshoot_tab = ttk.Frame(tab_control)
+        tab_control.add(troubleshoot_tab, text="Dépannage")
+        
+        trouble_frame = tk.Frame(troubleshoot_tab, bg=COLORS["card_bg"], padx=15, pady=15)
+        trouble_frame.pack(fill="both", expand=True)
+        
+        trouble_guide = """Résolution des problèmes courants:
+
+• Erreur d'API: 
+  Vérifiez que vos clés API sont correctes et que vous avez suffisamment de crédits.
+
+• Erreur de téléchargement:
+  Assurez-vous que l'URL est valide et accessible. Certaines plateformes peuvent restreindre les téléchargements.
+
+• Erreur de mémoire:
+  Essayez un modèle Whisper plus petit ou désactivez le multi-threading.
+
+• Erreur GPU:
+  Si vous rencontrez des problèmes avec le GPU, désactivez-le et utilisez le CPU.
+
+• Traduction incomplète:
+  Pour les vidéos longues, certains services peuvent limiter la taille des entrées. Essayez de diviser le traitement en sections plus petites.
+
+Pour plus d'aide, consultez les journaux d'application dans le menu "Journaux" > "Ouvrir le fichier journal"."""
+        
+        trouble_text = tk.Text(
+            trouble_frame, 
+            bg=COLORS["card_bg"],
+            relief="flat",
+            wrap="word", 
+            font=("Segoe UI", 10),
+            height=15
+        )
+        trouble_text.insert("1.0", trouble_guide)
+        trouble_text.config(state="disabled")
+        trouble_text.pack(fill="both", expand=True)
+        
+        # Fin des onglets
+        tab_control.pack(fill="both", expand=True)
+        
+        # Liens externes (optionnel)
+        links_frame = tk.Frame(main_frame, bg=COLORS["card_bg"], pady=10)
+        links_frame.pack(fill="x")
+        
+        def open_link(url):
+            webbrowser.open_new_tab(url)
+        
+        docs_link = tk.Label(
+            links_frame, 
+            text="Documentation en ligne",
+            fg=COLORS["primary"],
+            bg=COLORS["card_bg"],
+            cursor="hand2",
+            font=("Segoe UI", 9, "underline")
+        )
+        docs_link.pack(side="left", padx=(0, 15))
+        docs_link.bind("<Button-1>", lambda e: open_link("https://huggingface.co/docs"))
+        
+        api_link = tk.Label(
+            links_frame, 
+            text="API DeepL",
+            fg=COLORS["primary"],
+            bg=COLORS["card_bg"],
+            cursor="hand2",
+            font=("Segoe UI", 9, "underline")
+        )
+        api_link.pack(side="left", padx=(0, 15))
+        api_link.bind("<Button-1>", lambda e: open_link("https://www.deepl.com/docs-api"))
+        
+        # Bouton fermer
+        close_button = ModernButton(
+            main_frame, 
+            text="Fermer", 
+            command=help_window.destroy,
+            bg=COLORS["primary"],
+            font=("Segoe UI", 10),
+            padx=20,
+            pady=5
+        )
+        close_button.pack(pady=(15, 0))
     
     def run(self):
         """Lance l'application."""
         # Journaliser le démarrage de l'application
-        logging.info("=== Application démarrée (avec support multi-thread) ===")
+        logging.info("=== Application SRT Translator Pro démarrée (avec support multi-thread) ===")
         if config.is_cuda_available():
             logging.info(f"GPU détecté: {config.get_gpu_name()}")
         else:
