@@ -6,60 +6,35 @@ Application principale SRT Translator and Video Processor avec support multi-thr
 """
 
 import tkinter as tk
-from tkinter import messagebox, filedialog
-from tkinter import ttk
-from tkinter.ttk import Combobox
+from tkinter import messagebox, filedialog, ttk
 import os
 import logging
 from PIL import Image, ImageTk
 import webbrowser
-
-# Supprimer tous les logs inutiles Hugging Face
-logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
-logging.getLogger("huggingface_hub.file_download").setLevel(logging.ERROR)
-logging.getLogger("huggingface_hub.utils").setLevel(logging.ERROR)
-logging.getLogger("transformers").setLevel(logging.WARNING)
-# Configuration simple et lisible des logs
-logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
-logger = logging.getLogger(__name__)
-logging.getLogger("numba").setLevel(logging.WARNING)
-
-# Niveau global des logs
-logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
-
-# Désactiver les logs très verbeux
-logging.getLogger("httpx").setLevel(logging.WARNING)
-logging.getLogger("openai").setLevel(logging.WARNING)
-logging.getLogger("urllib3").setLevel(logging.WARNING)
-logging.getLogger("requests").setLevel(logging.WARNING)
-logging.getLogger("huggingface_hub").setLevel(logging.WARNING)
-logging.getLogger("huggingface_hub.file_download").setLevel(logging.ERROR)
-logging.getLogger("huggingface_hub.utils").setLevel(logging.ERROR)
 import threading
 import queue
 
 # Importer les modules personnalisés
 from utils import setup_logger, config, command_queue, open_file, clear_log_file
 from ui_components import ProgressWindow, ResultDialog
-# Import both processors - just once
 from video_processor import VideoProcessor, ThreadedVideoProcessor
-from video_processor import VideoProcessor
 
+# Configuration des logs - Regroupé et simplifié
+for logger_name in ["huggingface_hub", "huggingface_hub.file_download", 
+                   "huggingface_hub.utils", "transformers", "numba",
+                   "httpx", "openai", "urllib3", "requests"]:
+    logging.getLogger(logger_name).setLevel(logging.WARNING)
 
+# Configuration globale des logs
+logging.basicConfig(level=logging.INFO, format='[%(levelname)s] %(message)s')
+logger = logging.getLogger(__name__)
 
 # Définition des couleurs
 COLORS = {
-    "primary": "#3f51b5",      # Bleu principal
-    "primary_dark": "#303f9f", # Bleu foncé pour survol
-    "secondary": "#ff4081",    # Rose accentuation
-    "background": "#f5f5f7",   # Gris très clair
-    "card_bg": "#ffffff",      # Blanc pour les cartes
-    "text": "#212121",         # Texte principal presque noir
-    "text_secondary": "#757575", # Texte secondaire gris
-    "success": "#4caf50",      # Vert pour succès
-    "warning": "#ff9800",      # Orange pour avertissements
-    "error": "#f44336",        # Rouge pour erreurs
-    "border": "#e0e0e0"        # Gris clair pour bordures
+    "primary": "#3f51b5", "primary_dark": "#303f9f", "secondary": "#ff4081",
+    "background": "#f5f5f7", "card_bg": "#ffffff", "text": "#212121",
+    "text_secondary": "#757575", "success": "#4caf50", "warning": "#ff9800",
+    "error": "#f44336", "border": "#e0e0e0"
 }
 
 class ModernButton(tk.Button):
@@ -67,34 +42,29 @@ class ModernButton(tk.Button):
     def __init__(self, master=None, **kwargs):
         self.bg_color = kwargs.pop('bg', COLORS["primary"])
         self.hover_color = kwargs.pop('hover_color', COLORS["primary_dark"])
-        kwargs['bg'] = self.bg_color
-        kwargs['activebackground'] = self.hover_color
-        kwargs['bd'] = kwargs.get('bd', 0)
-        kwargs['relief'] = kwargs.get('relief', 'flat')
-        kwargs['fg'] = kwargs.get('fg', 'white')
-        kwargs['activeforeground'] = kwargs.get('activeforeground', 'white')
-        kwargs['font'] = kwargs.get('font', ('Segoe UI', 10))
+        kwargs.update({
+            'bg': self.bg_color, 'activebackground': self.hover_color,
+            'bd': kwargs.get('bd', 0), 'relief': kwargs.get('relief', 'flat'),
+            'fg': kwargs.get('fg', 'white'), 'activeforeground': kwargs.get('activeforeground', 'white'),
+            'font': kwargs.get('font', ('Segoe UI', 10))
+        })
         super().__init__(master, **kwargs)
-        
-        self.bind("<Enter>", self.on_enter)
-        self.bind("<Leave>", self.on_leave)
+        self.bind("<Enter>", self._on_enter)
+        self.bind("<Leave>", self._on_leave)
     
-    def on_enter(self, e):
-        self['bg'] = self.hover_color
-        
-    def on_leave(self, e):
-        self['bg'] = self.bg_color
+    def _on_enter(self, e): self['bg'] = self.hover_color
+    def _on_leave(self, e): self['bg'] = self.bg_color
 
 class ModernFrame(tk.Frame):
     """Frame avec bordure et ombre pour style carte"""
     def __init__(self, master=None, **kwargs):
-        kwargs['bg'] = kwargs.get('bg', COLORS["card_bg"])
-        kwargs['bd'] = kwargs.get('bd', 1)
-        kwargs['relief'] = kwargs.get('relief', 'solid')
-        kwargs['highlightbackground'] = kwargs.get('highlightbackground', COLORS["border"])
-        kwargs['highlightthickness'] = kwargs.get('highlightthickness', 1)
-        kwargs['padx'] = kwargs.get('padx', 15)
-        kwargs['pady'] = kwargs.get('pady', 15)
+        kwargs.update({
+            'bg': kwargs.get('bg', COLORS["card_bg"]), 'bd': kwargs.get('bd', 1),
+            'relief': kwargs.get('relief', 'solid'), 
+            'highlightbackground': kwargs.get('highlightbackground', COLORS["border"]),
+            'highlightthickness': kwargs.get('highlightthickness', 1),
+            'padx': kwargs.get('padx', 15), 'pady': kwargs.get('pady', 15)
+        })
         super().__init__(master, **kwargs)
 
 class SRTTranslatorApp:
@@ -108,46 +78,48 @@ class SRTTranslatorApp:
         self.root.configure(bg=COLORS["background"])
         self.root.minsize(950, 850)
         
-        # Configuration de la police par défaut
+        # Configuration de la police par défaut et du thème
         self.default_font = ('Segoe UI', 10)
+        self._setup_theme()
         
-        # Configuration du thème
+        # IMPORTANT: Initialize use_threading before _create_ui is called
+        self.use_threading = tk.BooleanVar(value=True)
+        
+        # Création de l'interface et configuration du processeur
+        self._create_ui()
+        self._update_processor()
+        self._setup_command_listener()
+
+    def _setup_theme(self):
+        """Configure le thème de l'application."""
         style = ttk.Style(self.root)
         style.theme_use("clam")
         
         # Configure les styles personnalisés
-        style.configure("TFrame", background=COLORS["background"])
-        style.configure("Card.TFrame", background=COLORS["card_bg"])
-        style.configure("TLabel", background=COLORS["card_bg"], font=self.default_font)
+        for widget, bg in [("TFrame", COLORS["background"]), ("Card.TFrame", COLORS["card_bg"]), 
+                         ("TLabel", COLORS["card_bg"]), ("TCheckbutton", COLORS["card_bg"])]:
+            style.configure(widget, background=bg, font=self.default_font)
+        
         style.configure("Header.TLabel", font=("Segoe UI", 16, "bold"))
         style.configure("Subheader.TLabel", font=("Segoe UI", 12))
         style.configure("TEntry", font=self.default_font)
-        style.configure("TCheckbutton", background=COLORS["card_bg"], font=self.default_font)
         style.configure("TCombobox", font=self.default_font)
-
-        # IMPORTANT: Initialize use_threading before _create_ui is called
-        self.use_threading = tk.BooleanVar(value=True)  # Option pour activer/désactiver le multi-threading
-
-        # Création de l'interface utilisateur
-        self._create_ui()
-
-        # Processeur de vidéos
-        self._update_processor()
-
-        # Configuration du listener de commandes
-        self._setup_command_listener()
 
     def _update_processor(self):
         """Met à jour le processeur en fonction de l'option de threading."""
-        if self.use_threading.get():
-            self.processor = ThreadedVideoProcessor(config)
-            logging.info("Mode multi-thread activé")
-        else:
-            self.processor = VideoProcessor(config)
-            logging.info("Mode multi-thread désactivé")
-        
-        # Mettre à jour le client API
+        self.processor = ThreadedVideoProcessor(config) if self.use_threading.get() else VideoProcessor(config)
+        logging.info(f"Mode multi-thread {'activé' if self.use_threading.get() else 'désactivé'}")
         self.processor.update_api_client()
+
+    def _create_label(self, parent, text, font=None, bg=None, fg=None, anchor="w", pady=0):
+        """Crée un label avec les paramètres spécifiés."""
+        return tk.Label(
+            parent, text=text, 
+            font=font or self.default_font, 
+            bg=bg or COLORS["card_bg"],
+            fg=fg or COLORS["text"],
+            anchor=anchor
+        ).pack(anchor=anchor, pady=pady)
 
     def _create_ui(self):
         """Crée l'interface utilisateur principale."""
@@ -155,20 +127,49 @@ class SRTTranslatorApp:
         main_container = tk.Frame(self.root, bg=COLORS["background"], padx=20, pady=20)
         main_container.pack(fill="both", expand=True)
         
-        # Section d'en-tête avec logo et titre
-        header_frame = tk.Frame(main_container, bg=COLORS["background"])
+        # Créer l'en-tête
+        self._create_header(main_container)
+        
+        # Cartes de contenu
+        content_frame = tk.Frame(main_container, bg=COLORS["background"])
+        content_frame.pack(fill="both", expand=True, pady=(0, 20))
+        
+        # Division en colonnes
+        left_column = tk.Frame(content_frame, bg=COLORS["background"])
+        left_column.pack(side="left", fill="both", expand=True, padx=(0, 10))
+        
+        right_column = tk.Frame(content_frame, bg=COLORS["background"])
+        right_column.pack(side="right", fill="both", expand=True, padx=(10, 0))
+        
+        # Créer les différentes sections
+        self._create_source_section(left_column)
+        self._create_config_section(left_column)
+        self._create_advanced_section(right_column)
+        self._create_status_section(right_column)
+        
+        # Bouton d'action
+        self._create_action_button(main_container)
+        
+        # Menu et valeurs par défaut
+        self._create_menu()
+        self._load_defaults()
+        
+        # Message initial
+        logging.info("Application SRT Translator Pro démarrée et prête à l'emploi")
+
+    def _create_header(self, parent):
+        """Crée la section d'en-tête avec logo et titre."""
+        header_frame = tk.Frame(parent, bg=COLORS["background"])
         header_frame.pack(fill="x", pady=(0, 20))
         
         # Logo et titre
         try:
-            # Remplacez par le chemin de votre logo si vous en avez un
             logo_img = Image.open("assets/logo.png").resize((48, 48))
             logo_photo = ImageTk.PhotoImage(logo_img)
             logo_label = tk.Label(header_frame, image=logo_photo, bg=COLORS["background"])
-            logo_label.image = logo_photo  # Garde une référence
+            logo_label.image = logo_photo
             logo_label.pack(side="left", padx=(0, 15))
         except:
-            # Si pas d'image, on met juste un placeholder coloré
             logo_frame = tk.Frame(header_frame, width=48, height=48, bg=COLORS["primary"])
             logo_frame.pack(side="left", padx=(0, 15))
 
@@ -176,84 +177,54 @@ class SRTTranslatorApp:
         title_frame.pack(side="left", fill="y")
         
         tk.Label(
-            title_frame, 
-            text="SRT Translator Pro", 
-            font=("Segoe UI", 22, "bold"), 
-            fg=COLORS["primary"], 
-            bg=COLORS["background"]
+            title_frame, text="SRT Translator Pro", 
+            font=("Segoe UI", 22, "bold"), fg=COLORS["primary"], bg=COLORS["background"]
         ).pack(anchor="w")
         
         tk.Label(
-            title_frame, 
-            text="Traduction et traitement vidéo avec IA", 
-            font=("Segoe UI", 12), 
-            fg=COLORS["text_secondary"], 
-            bg=COLORS["background"]
+            title_frame, text="Traduction et traitement vidéo avec IA", 
+            font=("Segoe UI", 12), fg=COLORS["text_secondary"], bg=COLORS["background"]
         ).pack(anchor="w")
-        
-        # Cartes de contenu
-        content_frame = tk.Frame(main_container, bg=COLORS["background"])
-        content_frame.pack(fill="both", expand=True, pady=(0, 20))
-        
-        # Première colonne
-        left_column = tk.Frame(content_frame, bg=COLORS["background"])
-        left_column.pack(side="left", fill="both", expand=True, padx=(0, 10))
-        
-        # Deuxième colonne
-        right_column = tk.Frame(content_frame, bg=COLORS["background"])
-        right_column.pack(side="right", fill="both", expand=True, padx=(10, 0))
-        
-        # --- SECTION SOURCES VIDÉO ---
-        source_card = ModernFrame(left_column)
+
+    def _create_source_section(self, parent):
+        """Crée la section de source vidéo."""
+        source_card = ModernFrame(parent)
         source_card.pack(fill="x", pady=(0, 20))
         
         tk.Label(
-            source_card, 
-            text="Source Vidéo", 
-            font=("Segoe UI", 14, "bold"), 
-            bg=COLORS["card_bg"]
+            source_card, text="Source Vidéo", 
+            font=("Segoe UI", 14, "bold"), bg=COLORS["card_bg"]
         ).pack(anchor="w", pady=(0, 15))
         
-        # URL d'entrée avec icône
+        # URL d'entrée
         url_frame = tk.Frame(source_card, bg=COLORS["card_bg"])
         url_frame.pack(fill="x", pady=(0, 15))
         
         tk.Label(
-            url_frame, 
-            text="URL de la vidéo:", 
-            font=self.default_font, 
-            bg=COLORS["card_bg"]
+            url_frame, text="URL de la vidéo:", 
+            font=self.default_font, bg=COLORS["card_bg"]
         ).pack(anchor="w")
         
         url_input_frame = tk.Frame(url_frame, bg=COLORS["card_bg"])
         url_input_frame.pack(fill="x", pady=(5, 0))
         
-        self.url_entry = tk.Entry(
-            url_input_frame, 
-            font=self.default_font, 
-            bd=1, 
-            relief="solid"
-        )
+        self.url_entry = tk.Entry(url_input_frame, font=self.default_font, bd=1, relief="solid")
         self.url_entry.pack(side="left", fill="x", expand=True)
         
         browse_btn = ModernButton(
-            url_input_frame, 
-            text="Parcourir", 
-            command=self._select_local_file,
-            font=self.default_font,
-            padx=10
+            url_input_frame, text="Parcourir", 
+            command=self._select_local_file, font=self.default_font, padx=10
         )
         browse_btn.pack(side="right", padx=(10, 0))
-        
-        # --- SECTION CONFIGURATION ---
-        config_card = ModernFrame(left_column)
+
+    def _create_config_section(self, parent):
+        """Crée la section de configuration."""
+        config_card = ModernFrame(parent)
         config_card.pack(fill="x")
         
         tk.Label(
-            config_card, 
-            text="Configuration", 
-            font=("Segoe UI", 14, "bold"), 
-            bg=COLORS["card_bg"]
+            config_card, text="Configuration", 
+            font=("Segoe UI", 14, "bold"), bg=COLORS["card_bg"]
         ).pack(anchor="w", pady=(0, 15))
         
         # Section des API Keys
@@ -261,45 +232,18 @@ class SRTTranslatorApp:
         api_frame.pack(fill="x", pady=(0, 15))
         
         tk.Label(
-            api_frame, 
-            text="Clés API", 
-            font=("Segoe UI", 12), 
-            bg=COLORS["card_bg"], 
-            fg=COLORS["primary"]
+            api_frame, text="Clés API", font=("Segoe UI", 12), 
+            bg=COLORS["card_bg"], fg=COLORS["primary"]
         ).pack(anchor="w", pady=(0, 5))
         
         # DeepL API Key
-        tk.Label(
-            api_frame, 
-            text="Clé API DeepL:", 
-            bg=COLORS["card_bg"],
-            font=self.default_font
-        ).pack(anchor="w")
-        
-        self.deepl_key_entry = tk.Entry(
-            api_frame, 
-            font=self.default_font, 
-            bd=1, 
-            relief="solid", 
-            show="•"
-        )
+        tk.Label(api_frame, text="Clé API DeepL:", bg=COLORS["card_bg"], font=self.default_font).pack(anchor="w")
+        self.deepl_key_entry = tk.Entry(api_frame, font=self.default_font, bd=1, relief="solid", show="•")
         self.deepl_key_entry.pack(fill="x", pady=(5, 10))
         
         # OpenAI API Key
-        tk.Label(
-            api_frame, 
-            text="Clé API OpenAI:", 
-            bg=COLORS["card_bg"],
-            font=self.default_font
-        ).pack(anchor="w")
-        
-        self.openai_key_entry = tk.Entry(
-            api_frame, 
-            font=self.default_font, 
-            bd=1, 
-            relief="solid", 
-            show="•"
-        )
+        tk.Label(api_frame, text="Clé API OpenAI:", bg=COLORS["card_bg"], font=self.default_font).pack(anchor="w")
+        self.openai_key_entry = tk.Entry(api_frame, font=self.default_font, bd=1, relief="solid", show="•")
         self.openai_key_entry.pack(fill="x", pady=5)
         
         # Gestion des langues
@@ -307,58 +251,37 @@ class SRTTranslatorApp:
         language_frame.pack(fill="x", pady=(0, 15))
         
         tk.Label(
-            language_frame, 
-            text="Langue et Traduction", 
-            font=("Segoe UI", 12), 
-            bg=COLORS["card_bg"], 
-            fg=COLORS["primary"]
+            language_frame, text="Langue et Traduction", 
+            font=("Segoe UI", 12), bg=COLORS["card_bg"], fg=COLORS["primary"]
         ).pack(anchor="w", pady=(0, 5))
         
         # Langue cible
-        tk.Label(
-            language_frame, 
-            text="Langue cible:", 
-            bg=COLORS["card_bg"],
-            font=self.default_font
-        ).pack(anchor="w")
-        
+        tk.Label(language_frame, text="Langue cible:", bg=COLORS["card_bg"], font=self.default_font).pack(anchor="w")
         self.language_combobox = ttk.Combobox(
-            language_frame, 
-            values=[
+            language_frame, values=[
                 "FR - French", "EN - English", "ES - Spanish", "DE - German", "IT - Italian",
                 "ZH - Chinese", "JA - Japanese", "RU - Russian", "NL - Dutch",
                 "PT - Portuguese", "AR - Arabic", "HI - Hindi", "KO - Korean", "TR - Turkish"
-            ], 
-            state="readonly", 
-            font=self.default_font
+            ], state="readonly", font=self.default_font
         )
         self.language_combobox.pack(fill="x", pady=(5, 10))
         
         # Service de traduction
-        tk.Label(
-            language_frame, 
-            text="Service de traduction:", 
-            bg=COLORS["card_bg"],
-            font=self.default_font
-        ).pack(anchor="w")
-        
+        tk.Label(language_frame, text="Service de traduction:", bg=COLORS["card_bg"], font=self.default_font).pack(anchor="w")
         self.service_combobox = ttk.Combobox(
-            language_frame, 
-            values=["ChatGPT", "DeepL"], 
-            state="readonly", 
-            font=self.default_font
+            language_frame, values=["ChatGPT", "DeepL"], 
+            state="readonly", font=self.default_font
         )
         self.service_combobox.pack(fill="x", pady=5)
-        
-        # --- SECTION AVANCÉE (Colonne de droite) ---
-        advanced_card = ModernFrame(right_column)
+
+    def _create_advanced_section(self, parent):
+        """Crée la section des paramètres avancés."""
+        advanced_card = ModernFrame(parent)
         advanced_card.pack(fill="x", pady=(0, 20))
         
         tk.Label(
-            advanced_card, 
-            text="Paramètres Avancés", 
-            font=("Segoe UI", 14, "bold"), 
-            bg=COLORS["card_bg"]
+            advanced_card, text="Paramètres Avancés", 
+            font=("Segoe UI", 14, "bold"), bg=COLORS["card_bg"]
         ).pack(anchor="w", pady=(0, 15))
         
         # Configuration Whisper
@@ -366,11 +289,8 @@ class SRTTranslatorApp:
         whisper_frame.pack(fill="x", pady=(0, 15))
         
         tk.Label(
-            whisper_frame, 
-            text="Modèle Whisper", 
-            font=("Segoe UI", 12), 
-            bg=COLORS["card_bg"], 
-            fg=COLORS["primary"]
+            whisper_frame, text="Modèle Whisper", 
+            font=("Segoe UI", 12), bg=COLORS["card_bg"], fg=COLORS["primary"]
         ).pack(anchor="w", pady=(0, 5))
         
         # Option GPU
@@ -379,46 +299,34 @@ class SRTTranslatorApp:
         
         self.gpu_var = tk.BooleanVar(value=config.is_cuda_available())
         gpu_check = ttk.Checkbutton(
-            gpu_frame, 
-            text="Utiliser le GPU (NVIDIA)", 
-            variable=self.gpu_var,
-            style="TCheckbutton"
+            gpu_frame, text="Utiliser le GPU (NVIDIA)", 
+            variable=self.gpu_var, style="TCheckbutton"
         )
         gpu_check.pack(side="left")
         
         # Si CUDA est indisponible
         if not config.is_cuda_available():
-            disabled_label = tk.Label(
-                gpu_frame, 
-                text="(CUDA non disponible)", 
-                fg=COLORS["error"],
-                bg=COLORS["card_bg"],
-                font=("Segoe UI", 9, "italic")
-            )
-            disabled_label.pack(side="left", padx=(5, 0))
+            tk.Label(
+                gpu_frame, text="(CUDA non disponible)", 
+                fg=COLORS["error"], bg=COLORS["card_bg"], font=("Segoe UI", 9, "italic")
+            ).pack(side="left", padx=(5, 0))
         
         # Sélection du modèle
         tk.Label(
-            whisper_frame, 
-            text="Sélectionnez le modèle Whisper:", 
-            bg=COLORS["card_bg"],
-            font=self.default_font
+            whisper_frame, text="Sélectionnez le modèle Whisper:", 
+            bg=COLORS["card_bg"], font=self.default_font
         ).pack(anchor="w")
         
         model_frame = tk.Frame(whisper_frame, bg=COLORS["card_bg"])
         model_frame.pack(fill="x", pady=5)
         
         self.whisper_model_combobox = ttk.Combobox(
-            model_frame, 
-            values=[
-                "tiny", "base", "small", "medium", "large", "large-v3-turbo"
-            ], 
-            state="readonly", 
-            font=self.default_font
+            model_frame, values=["tiny", "base", "small", "medium", "large", "large-v3-turbo"], 
+            state="readonly", font=self.default_font
         )
         self.whisper_model_combobox.pack(side="left", fill="x", expand=True)
         
-        # Tooltip sur les ressources
+        # Ressources modèles
         self.model_resources = {
             "tiny": {"RAM": "2GB", "VRAM": "1GB"},
             "base": {"RAM": "4GB", "VRAM": "2GB"},
@@ -432,11 +340,8 @@ class SRTTranslatorApp:
         info_frame.pack(fill="x", pady=(5, 0))
         
         self.resource_label = tk.Label(
-            info_frame, 
-            text="", 
-            bg=COLORS["card_bg"], 
-            font=("Segoe UI", 9, "italic"),
-            fg=COLORS["text_secondary"]
+            info_frame, text="", bg=COLORS["card_bg"], 
+            font=("Segoe UI", 9, "italic"), fg=COLORS["text_secondary"]
         )
         self.resource_label.pack(anchor="w")
         
@@ -452,33 +357,25 @@ class SRTTranslatorApp:
         perf_frame.pack(fill="x")
         
         tk.Label(
-            perf_frame, 
-            text="Performance", 
-            font=("Segoe UI", 12), 
-            bg=COLORS["card_bg"], 
-            fg=COLORS["primary"]
+            perf_frame, text="Performance", 
+            font=("Segoe UI", 12), bg=COLORS["card_bg"], fg=COLORS["primary"]
         ).pack(anchor="w", pady=(0, 5))
         
         # Option multi-thread
-        self.use_threading = tk.BooleanVar(value=True)
         thread_check = ttk.Checkbutton(
-            perf_frame, 
-            text="Activer le multi-thread (plus rapide mais consomme plus de ressources)", 
-            variable=self.use_threading,
-            command=self._update_processor,
-            style="TCheckbutton"
+            perf_frame, text="Activer le multi-thread (plus rapide mais consomme plus de ressources)", 
+            variable=self.use_threading, command=self._update_processor, style="TCheckbutton"
         )
         thread_check.pack(anchor="w", pady=5)
-        
-        # --- SECTION STATUT ET LOG ---
-        status_card = ModernFrame(right_column)
+
+    def _create_status_section(self, parent):
+        """Crée la section d'état et de log."""
+        status_card = ModernFrame(parent)
         status_card.pack(fill="both", expand=True)
         
         tk.Label(
-            status_card, 
-            text="État et Log", 
-            font=("Segoe UI", 14, "bold"), 
-            bg=COLORS["card_bg"]
+            status_card, text="État et Log", 
+            font=("Segoe UI", 14, "bold"), bg=COLORS["card_bg"]
         ).pack(anchor="w", pady=(0, 15))
         
         # Zone d'état du système
@@ -495,33 +392,18 @@ class SRTTranslatorApp:
         gpu_icon.pack(side="left", padx=(0, 5))
         
         gpu_text = "GPU disponible: " + (config.get_gpu_name() if config.is_cuda_available() else "Non disponible")
-        gpu_status = tk.Label(
-            gpu_status_frame, 
-            text=gpu_text, 
-            bg=COLORS["card_bg"], 
-            font=self.default_font
-        )
+        gpu_status = tk.Label(gpu_status_frame, text=gpu_text, bg=COLORS["card_bg"], font=self.default_font)
         gpu_status.pack(side="left")
         
         # Fenêtre de log
-        log_label = tk.Label(
-            status_card, 
-            text="Derniers logs:", 
-            bg=COLORS["card_bg"], 
-            font=self.default_font
-        )
-        log_label.pack(anchor="w")
+        tk.Label(status_card, text="Derniers logs:", bg=COLORS["card_bg"], font=self.default_font).pack(anchor="w")
         
         log_frame = tk.Frame(status_card, bg=COLORS["card_bg"], bd=1, relief="solid")
         log_frame.pack(fill="both", expand=True, pady=(5, 0))
         
         self.log_text = tk.Text(
-            log_frame, 
-            font=("Consolas", 9), 
-            bg="#f8f9fa", 
-            height=10,
-            wrap="word",
-            state="disabled"
+            log_frame, font=("Consolas", 9), bg="#f8f9fa", 
+            height=10, wrap="word", state="disabled"
         )
         self.log_text.pack(fill="both", expand=True)
         
@@ -530,7 +412,7 @@ class SRTTranslatorApp:
         log_scrollbar.pack(side="right", fill="y")
         self.log_text.config(yscrollcommand=log_scrollbar.set)
         
-        # Configurer le handler de logging pour afficher dans la UI
+        # Handler de logging pour l'interface
         class TextHandler(logging.Handler):
             def __init__(self, text_widget):
                 super().__init__()
@@ -538,49 +420,30 @@ class SRTTranslatorApp:
                 
             def emit(self, record):
                 msg = self.format(record)
-                
                 def append():
                     self.text_widget.configure(state='normal')
                     self.text_widget.insert('end', msg + '\n')
                     self.text_widget.see('end')
                     self.text_widget.configure(state='disabled')
-                
-                # Schedule to be run in the main thread
                 self.text_widget.after(0, append)
         
         # Ajouter le handler personnalisé
         text_handler = TextHandler(self.log_text)
-        formatter = logging.Formatter('[%(levelname)s] %(message)s')
-        text_handler.setFormatter(formatter)
-        
-        # Ajouter l'handler au logger
-        logger = logging.getLogger()
-        logger.addHandler(text_handler)
-        
-        # --- BOUTON D'ACTION ---
-        action_frame = tk.Frame(main_container, bg=COLORS["background"])
+        text_handler.setFormatter(logging.Formatter('[%(levelname)s] %(message)s'))
+        logging.getLogger().addHandler(text_handler)
+
+    def _create_action_button(self, parent):
+        """Crée le bouton d'action principal."""
+        action_frame = tk.Frame(parent, bg=COLORS["background"])
         action_frame.pack(fill="x", pady=(20, 0))
         
         process_btn = ModernButton(
-            action_frame, 
-            text="Démarrer le Traitement", 
+            action_frame, text="Démarrer le Traitement", 
             command=lambda: self._process_video(),
-            font=("Segoe UI", 12, "bold"),
-            padx=20, 
-            pady=12,
-            bg=COLORS["secondary"],
-            hover_color="#ff5a92"
+            font=("Segoe UI", 12, "bold"), padx=20, pady=12,
+            bg=COLORS["secondary"], hover_color="#ff5a92"
         )
         process_btn.pack()
-        
-        self._create_menu()
-        self._load_defaults()
-        
-        # Message initial
-        logging.info("Application SRT Translator Pro démarrée et prête à l'emploi")
-        
-        # Appeler la mise à jour des ressources
-        update_resource_info(None)
 
     def _create_menu(self):
         """Crée le menu de l'application."""
@@ -625,23 +488,23 @@ class SRTTranslatorApp:
             self.service_combobox.set(config.default_service)
         if not self.whisper_model_combobox.get():
             self.whisper_model_combobox.set(config.whisper_model)
+            # Mettre à jour l'info des ressources
+            model = self.whisper_model_combobox.get()
+            info = self.model_resources.get(model, {"RAM": "?", "VRAM": "?"})
+            self.resource_label.config(text=f"Ressources estimées: RAM {info['RAM']} / VRAM {info['VRAM']}")
     
     def _setup_command_listener(self):
         """Configure le listener de commandes venant du thread de traitement."""
         def check_commands():
             try:
-                # Vérifier s'il y a des commandes dans la queue
                 try:
                     cmd = command_queue.get_nowait()
                     self._handle_command(cmd)
                 except queue.Empty:
                     pass
-                
-                # Programmer la prochaine vérification
                 self.root.after(100, check_commands)
             except Exception as e:
                 logging.error(f"Erreur dans le listener de commandes: {e}")
-                # Réessayer
                 self.root.after(1000, check_commands)
         
         # Démarrer la vérification des commandes
@@ -652,18 +515,11 @@ class SRTTranslatorApp:
         command = cmd.get("command")
         
         if command == "processing_done":
-            # Traitement terminé avec succès
-            video_folder = cmd.get("video_folder")
-            self._handle_processing_done(video_folder)
-            
+            self._handle_processing_done(cmd.get("video_folder"))
         elif command == "processing_cancelled":
-            # Traitement annulé par l'utilisateur
             self._handle_processing_cancelled()
-            
         elif command == "error":
-            # Traitement terminé avec une erreur
-            error_message = cmd.get("message")
-            self._handle_processing_error(error_message)
+            self._handle_processing_error(cmd.get("message"))
     
     def _process_video(self, video_path=None):
         """Démarre le traitement d'une vidéo."""
@@ -702,14 +558,6 @@ class SRTTranslatorApp:
         # Créer la fenêtre de progression
         self.progress_window = ProgressWindow(self.root, "Traitement de la vidéo")
         
-        # Modifier cette ligne pour utiliser la méthode correcte de votre ProgressWindow
-        # Au lieu de update_status, utilisez la méthode qui existe réellement
-        # Par exemple, si vous avez une méthode update_progress:
-        # self.progress_window.update_progress("Initialisation...", 0)
-        # 
-        # Si vous n'avez pas de méthode pour mettre à jour le statut, supprimez cette ligne:
-        # self.progress_window.update_status("Initialisation...")
-        
         # Démarrer le traitement
         if video_path:
             logging.info(f"Traitement d'un fichier vidéo local: {os.path.basename(video_path)}")
@@ -717,7 +565,6 @@ class SRTTranslatorApp:
         else:
             logging.info(f"Traitement d'une vidéo à partir de l'URL: {url}")
             self.processor.process_video(url, None, target_language, translation_service, use_gpu)
-
     
     def _select_local_file(self):
         """Sélectionne un fichier vidéo local à traiter."""
@@ -737,14 +584,10 @@ class SRTTranslatorApp:
     def _handle_processing_done(self, video_folder):
         """Gère la fin de traitement réussie."""
         try:
-            # Fermer la fenêtre de progression
             self.progress_window.close()
-            
-            # Afficher la boîte de dialogue de résultat
             message = "Le traitement s'est terminé avec succès!\n\nTous les fichiers ont été enregistrés dans le dossier ci-dessous:"
             result_dialog = ResultDialog(self.root, "Traitement terminé", message, video_folder)
             result_dialog.show()
-            
         except Exception as e:
             logging.error(f"Erreur en fin de traitement: {e}", exc_info=True)
             messagebox.showinfo("Information", f"Le traitement est terminé.\nLes fichiers se trouvent dans:\n{video_folder}")
@@ -753,11 +596,7 @@ class SRTTranslatorApp:
         """Gère l'annulation du traitement."""
         try:
             self.progress_window.close()
-            messagebox.showinfo(
-                "Traitement annulé", 
-                "Le traitement a été annulé par l'utilisateur.",
-                icon="info"
-            )
+            messagebox.showinfo("Traitement annulé", "Le traitement a été annulé par l'utilisateur.", icon="info")
         except Exception as e:
             logging.error(f"Erreur lors de l'annulation: {e}")
     
@@ -794,35 +633,25 @@ class SRTTranslatorApp:
         content_frame.pack(fill="both", expand=True)
         
         try:
-            # Logo placeholder - remplacez par votre propre logo
             logo_img = Image.open("assets/logo.png").resize((80, 80))
             logo_photo = ImageTk.PhotoImage(logo_img)
             logo_label = tk.Label(content_frame, image=logo_photo, bg=COLORS["card_bg"])
             logo_label.image = logo_photo
             logo_label.pack(pady=(0, 20))
         except:
-            # Fallback si pas de logo
             logo_frame = tk.Frame(content_frame, width=80, height=80, bg=COLORS["primary"])
             logo_frame.pack(pady=(0, 20))
         
-        # Titre et version
         tk.Label(
-            content_frame, 
-            text="SRT Translator Pro", 
-            font=("Segoe UI", 18, "bold"), 
-            bg=COLORS["card_bg"], 
-            fg=COLORS["primary"]
+            content_frame, text="SRT Translator Pro", 
+            font=("Segoe UI", 18, "bold"), bg=COLORS["card_bg"], fg=COLORS["primary"]
         ).pack()
         
         tk.Label(
-            content_frame, 
-            text="Version 1.1", 
-            font=("Segoe UI", 10), 
-            bg=COLORS["card_bg"], 
-            fg=COLORS["text_secondary"]
+            content_frame, text="Version 1.1", 
+            font=("Segoe UI", 10), bg=COLORS["card_bg"], fg=COLORS["text_secondary"]
         ).pack(pady=(0, 20))
         
-        # Description
         description = """Une application avancée pour télécharger des vidéos, extraire l'audio, transcrire et traduire les sous-titres en utilisant la puissance de l'IA.
 
 Fonctionnalités :
@@ -835,26 +664,16 @@ Fonctionnalités :
 Développée avec Python et tkinter."""
 
         text_box = tk.Text(
-            content_frame, 
-            font=("Segoe UI", 10), 
-            bg=COLORS["card_bg"],
-            relief="flat",
-            height=10,
-            wrap="word"
+            content_frame, font=("Segoe UI", 10), bg=COLORS["card_bg"],
+            relief="flat", height=10, wrap="word"
         )
         text_box.insert("1.0", description)
         text_box.config(state="disabled")
         text_box.pack(fill="both", expand=True)
         
-        # Bouton OK pour fermer
         ok_button = ModernButton(
-            content_frame, 
-            text="Fermer", 
-            command=about_window.destroy,
-            bg=COLORS["primary"],
-            padx=20,
-            pady=5,
-            font=("Segoe UI", 10)
+            content_frame, text="Fermer", command=about_window.destroy,
+            bg=COLORS["primary"], padx=20, pady=5, font=("Segoe UI", 10)
         )
         ok_button.pack(pady=(20, 0))
     
@@ -879,24 +698,16 @@ Développée avec Python et tkinter."""
         
         # En-tête
         tk.Label(
-            main_frame, 
-            text="Guide d'utilisation", 
-            font=("Segoe UI", 16, "bold"), 
-            bg=COLORS["card_bg"], 
-            fg=COLORS["primary"]
+            main_frame, text="Guide d'utilisation", 
+            font=("Segoe UI", 16, "bold"), bg=COLORS["card_bg"], fg=COLORS["primary"]
         ).pack(anchor="w", pady=(0, 20))
         
         # Zone d'onglets
         tab_control = ttk.Notebook(main_frame)
         
-        # Onglet Démarrage rapide
-        quick_start = ttk.Frame(tab_control)
-        tab_control.add(quick_start, text="Démarrage rapide")
-        
-        quick_start_frame = tk.Frame(quick_start, bg=COLORS["card_bg"], padx=15, pady=15)
-        quick_start_frame.pack(fill="both", expand=True)
-        
-        quick_guide = """Comment utiliser SRT Translator Pro:
+        # Contenus des onglets
+        tab_contents = {
+            "Démarrage rapide": """Comment utiliser SRT Translator Pro:
 
 1. Entrez une URL de vidéo dans le champ ou sélectionnez un fichier local avec le bouton "Parcourir".
 
@@ -908,28 +719,9 @@ Développée avec Python et tkinter."""
 
 5. Cliquez sur "Démarrer le traitement".
 
-6. Suivez la progression dans la fenêtre qui apparaît. Vous pouvez annuler à tout moment si nécessaire."""
-        
-        qs_text = tk.Text(
-            quick_start_frame, 
-            bg=COLORS["card_bg"],
-            relief="flat",
-            wrap="word", 
-            font=("Segoe UI", 10),
-            height=15
-        )
-        qs_text.insert("1.0", quick_guide)
-        qs_text.config(state="disabled")
-        qs_text.pack(fill="both", expand=True)
-        
-        # Onglet Paramètres avancés
-        adv_tab = ttk.Frame(tab_control)
-        tab_control.add(adv_tab, text="Paramètres avancés")
-        
-        adv_frame = tk.Frame(adv_tab, bg=COLORS["card_bg"], padx=15, pady=15)
-        adv_frame.pack(fill="both", expand=True)
-        
-        adv_guide = """Paramètres avancés:
+6. Suivez la progression dans la fenêtre qui apparaît. Vous pouvez annuler à tout moment si nécessaire.""",
+            
+            "Paramètres avancés": """Paramètres avancés:
 
 • Modèles Whisper:
   - tiny: Rapide, moins précis, idéal pour les tests (faibles ressources)
@@ -943,28 +735,9 @@ Développée avec Python et tkinter."""
   L'option GPU accélère considérablement le traitement mais nécessite une carte NVIDIA compatible CUDA. La quantité de VRAM nécessaire dépend du modèle Whisper choisi.
 
 • Multi-threading:
-  Permet de traiter plusieurs tâches simultanément, ce qui accélère le processus global. Désactivez cette option si vous rencontrez des problèmes de stabilité ou de ressources."""
-        
-        adv_text = tk.Text(
-            adv_frame, 
-            bg=COLORS["card_bg"],
-            relief="flat",
-            wrap="word", 
-            font=("Segoe UI", 10),
-            height=15
-        )
-        adv_text.insert("1.0", adv_guide)
-        adv_text.config(state="disabled")
-        adv_text.pack(fill="both", expand=True)
-        
-        # Onglet Dépannage
-        troubleshoot_tab = ttk.Frame(tab_control)
-        tab_control.add(troubleshoot_tab, text="Dépannage")
-        
-        trouble_frame = tk.Frame(troubleshoot_tab, bg=COLORS["card_bg"], padx=15, pady=15)
-        trouble_frame.pack(fill="both", expand=True)
-        
-        trouble_guide = """Résolution des problèmes courants:
+  Permet de traiter plusieurs tâches simultanément, ce qui accélère le processus global. Désactivez cette option si vous rencontrez des problèmes de stabilité ou de ressources.""",
+            
+            "Dépannage": """Résolution des problèmes courants:
 
 • Erreur d'API: 
   Vérifiez que vos clés API sont correctes et que vous avez suffisamment de crédits.
@@ -982,60 +755,49 @@ Développée avec Python et tkinter."""
   Pour les vidéos longues, certains services peuvent limiter la taille des entrées. Essayez de diviser le traitement en sections plus petites.
 
 Pour plus d'aide, consultez les journaux d'application dans le menu "Journaux" > "Ouvrir le fichier journal"."""
+        }
         
-        trouble_text = tk.Text(
-            trouble_frame, 
-            bg=COLORS["card_bg"],
-            relief="flat",
-            wrap="word", 
-            font=("Segoe UI", 10),
-            height=15
-        )
-        trouble_text.insert("1.0", trouble_guide)
-        trouble_text.config(state="disabled")
-        trouble_text.pack(fill="both", expand=True)
+        # Créer les onglets
+        for tab_name, tab_content in tab_contents.items():
+            tab = ttk.Frame(tab_control)
+            tab_control.add(tab, text=tab_name)
+            
+            tab_frame = tk.Frame(tab, bg=COLORS["card_bg"], padx=15, pady=15)
+            tab_frame.pack(fill="both", expand=True)
+            
+            text_widget = tk.Text(
+                tab_frame, bg=COLORS["card_bg"], relief="flat",
+                wrap="word", font=("Segoe UI", 10), height=15
+            )
+            text_widget.insert("1.0", tab_content)
+            text_widget.config(state="disabled")
+            text_widget.pack(fill="both", expand=True)
         
-        # Fin des onglets
+        # Ajouter les onglets
         tab_control.pack(fill="both", expand=True)
         
-        # Liens externes (optionnel)
+        # Liens externes
         links_frame = tk.Frame(main_frame, bg=COLORS["card_bg"], pady=10)
         links_frame.pack(fill="x")
         
         def open_link(url):
             webbrowser.open_new_tab(url)
         
-        docs_link = tk.Label(
-            links_frame, 
-            text="Documentation en ligne",
-            fg=COLORS["primary"],
-            bg=COLORS["card_bg"],
-            cursor="hand2",
-            font=("Segoe UI", 9, "underline")
-        )
-        docs_link.pack(side="left", padx=(0, 15))
-        docs_link.bind("<Button-1>", lambda e: open_link("https://huggingface.co/docs"))
-        
-        api_link = tk.Label(
-            links_frame, 
-            text="API DeepL",
-            fg=COLORS["primary"],
-            bg=COLORS["card_bg"],
-            cursor="hand2",
-            font=("Segoe UI", 9, "underline")
-        )
-        api_link.pack(side="left", padx=(0, 15))
-        api_link.bind("<Button-1>", lambda e: open_link("https://www.deepl.com/docs-api"))
+        for link_text, link_url in [
+            ("Documentation en ligne", "https://huggingface.co/docs"),
+            ("API DeepL", "https://www.deepl.com/docs-api")
+        ]:
+            link = tk.Label(
+                links_frame, text=link_text, fg=COLORS["primary"], bg=COLORS["card_bg"],
+                cursor="hand2", font=("Segoe UI", 9, "underline")
+            )
+            link.pack(side="left", padx=(0, 15))
+            link.bind("<Button-1>", lambda e, url=link_url: open_link(url))
         
         # Bouton fermer
         close_button = ModernButton(
-            main_frame, 
-            text="Fermer", 
-            command=help_window.destroy,
-            bg=COLORS["primary"],
-            font=("Segoe UI", 10),
-            padx=20,
-            pady=5
+            main_frame, text="Fermer", command=help_window.destroy,
+            bg=COLORS["primary"], font=("Segoe UI", 10), padx=20, pady=5
         )
         close_button.pack(pady=(15, 0))
     
