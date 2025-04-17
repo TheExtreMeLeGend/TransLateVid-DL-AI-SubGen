@@ -45,16 +45,16 @@ def translate_text_deepl(text, target_language):
 def translate_text_openai(text, target_language):
     logger.info(f"\n📤 [OpenAI] Envoi de la phrase à traduire ({target_language}) :\n{text}")
     prompt = (
-        "Please ensure the translation is accurate and maintains the original meaning. "
-        "Do not include any additional comments, explanations, or formatting. "
-        "Only provide the translation in the target language. "
-        "Give the best possible interpretation based on the context you understand "
-        "for a more nuanced and precise translation. "
-        f"The translation should be in {target_language}:\n\n{text}"
+        "Attention : la transcription automatique peut contenir des erreurs. "
+        "Veillez à ce que la phrase traduite soit cohérente dans son contexte, "
+        "en corrigeant les éventuelles coquilles si nécessaire. "
+        "Assurez-vous que la traduction est précise et préserve le sens original. "
+        "Ne fournissez aucun commentaire, explication ou formatage supplémentaire. "
+        f"La traduction doit être en {target_language} :\n\n{text}"
     )
 
     messages = [
-        {"role": "assistant", "content": "You are a highly capable translator."},
+        {"role": "assistant", "content": "Vous êtes un traducteur très compétent."},
         {"role": "user", "content": prompt}
     ]
 
@@ -70,16 +70,16 @@ def translate_text_openai(text, target_language):
 def translate_text_o3(text, target_language):
     logger.info(f"\n📤 [O3] Envoi de la phrase à traduire ({target_language}) :\n{text}")
     prompt = (
-        "Please ensure the translation is accurate and maintains the original meaning. "
-        "Do not include any additional comments, explanations, or formatting. "
-        "Only provide the translation in the target language. "
-        "Give the best possible interpretation based on the context you understand "
-        "for a more nuanced and precise translation. "
-        f"The translation should be in {target_language}:\n\n{text}"
+        "Attention : la transcription automatique peut contenir des erreurs. "
+        "Veillez à ce que la phrase traduite soit cohérente dans son contexte, "
+        "en corrigeant les éventuelles coquilles si nécessaire. "
+        "Assurez-vous que la traduction est précise et préserve le sens original. "
+        "Ne fournissez aucun commentaire, explication ou formatage supplémentaire. "
+        f"La traduction doit être en {target_language} :\n\n{text}"
     )
 
     messages = [
-        {"role": "assistant", "content": "You are a highly capable translator."},
+        {"role": "assistant", "content": "Vous êtes un traducteur très compétent."},
         {"role": "user", "content": prompt}
     ]
 
