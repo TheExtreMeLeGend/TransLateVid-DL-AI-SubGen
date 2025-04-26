@@ -1,188 +1,175 @@
-import whisper_timestamped as whisper
-import datetime
-import os
+import importlib
 import json
 import csv
 import torch
-from utils import progress_queue, config  # ✅ import config
 import logging
-logging.getLogger("huggingface_hub.file_download").setLevel(logging.ERROR)
-logging.getLogger("huggingface_hub.utils").setLevel(logging.ERROR)
+from typing import Dict, Optional
+
+# === Patch robust pour hook_attention_weights ===
+ts_transcribe = importlib.import_module("whisper_timestamped.transcribe")
+
+# Hook sécurisé : ignore outs[2] == None
+def _safe_hook_attention_weights(layer, ins, outs, index):
+    if len(outs) < 3 or outs[2] is None:
+        return
+    x, sim, w = outs
+    if w.shape[-2] <= 1:
+        return
+    return _orig_hook(layer, ins, outs, index)
+
+# Recherche dynamique et remplacement
+_orig_hook = None
+for name in dir(ts_transcribe):
+    if name.endswith("hook_attention_weights"):
+        _orig_hook = getattr(ts_transcribe, name)
+        setattr(ts_transcribe, name, _safe_hook_attention_weights)
+        break
+
+if _orig_hook is None:
+    logging.getLogger(__name__).warning(
+        "hook_attention_weights introuvable — patch non appliqué"
+    )
+# === Fin du patch ===
+
+import whisper_timestamped as whisper
+from utils import progress_queue, config
+
+# Afficher les logs Whisper pour voir le verbose
+logging.basicConfig(level=logging.INFO)
 logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
-from model_downloader import download_whisper_model
+logging.getLogger("whisper_timestamped").setLevel(logging.INFO)
 
 
-progress_queue.put({
-    'value': 10,
-    'status_text': "📥 Téléchargement du modèle Whisper..."
-})
+def _fmt_time(sec: float) -> str:
+    ms = int((sec - int(sec)) * 1000)
+    total = int(sec)
+    s = total % 60
+    m = (total // 60) % 60
+    h = total // 3600
+    return f"{h:02}:{m:02}:{s:02},{ms:03}"
 
-def format_time(seconds):
-    milliseconds = int((seconds - int(seconds)) * 1000)
-    seconds = int(seconds)
-    minutes = seconds // 60
-    seconds = seconds % 60
-    hours = minutes // 60
-    minutes = minutes % 60
-    return f"{hours:02}:{minutes:02}:{seconds:02},{milliseconds:03}"
 
-def clean_text(text):
-    cleaned_text = text.replace("B:", "").replace("C:", "").replace("A:", "")
-    return cleaned_text.strip()
+def _write_all_outputs(result: Dict, base: str) -> None:
+    try:
+        with open(f"{base}.json", "w", encoding="utf-8") as f:
+            json.dump(result, f, ensure_ascii=False, indent=2)
+        with open(f"{base}.srt", "w", encoding="utf-8") as srt:
+            for i, seg in enumerate(result.get("segments", []), start=1):
+                s, e = _fmt_time(seg["start"]), _fmt_time(seg["end"])
+                txt = seg.get("text", "").strip()
+                srt.write(f"{i}\n{s} --> {e}\n{txt}\n\n")
+        with open(f"{base}.vtt", "w", encoding="utf-8") as vtt:
+            vtt.write("WEBVTT\n\n")
+            for seg in result.get("segments", []):
+                s = _fmt_time(seg["start"]).replace(",", ".")
+                e = _fmt_time(seg["end"]).replace(",", ".")
+                txt = seg.get("text", "").strip()
+                vtt.write(f"{s} --> {e}\n{txt}\n\n")
+        for sep, ext in [(",", "csv"), ("\t", "tsv")]:
+            with open(f"{base}.{ext}", "w", encoding="utf-8", newline="") as f:
+                w = csv.writer(f, delimiter=sep)
+                w.writerow(["start", "end", "text"])
+                for seg in result.get("segments", []):
+                    w.writerow([_fmt_time(seg["start"]), _fmt_time(seg["end"]), seg.get("text","").strip()])
+    except Exception as e:
+        logging.error(f"Erreur lors de l'écriture des fichiers: {e}")
+        raise
 
-def convert_transcription_to_srt(transcription, srt_path):
-    with open(srt_path, 'w', encoding='utf-8') as srt_file:
-        for i, segment in enumerate(transcription['segments']):
-            start_time = format_time(segment['start'])
-            end_time = format_time(segment['end'])
-            text = clean_text(segment['text'])
-            srt_file.write(f"{i+1}\n")
-            srt_file.write(f"{start_time} --> {end_time}\n")
-            srt_file.write(f"{text.strip()}\n\n")
 
-def convert_transcription_to_vtt(transcription, vtt_path):
-    with open(vtt_path, 'w', encoding='utf-8') as vtt_file:
-        vtt_file.write("WEBVTT\n\n")
-        for i, segment in enumerate(transcription['segments']):
-            start_time = format_time(segment['start']).replace(',', '.')
-            end_time = format_time(segment['end']).replace(',', '.')
-            text = clean_text(segment['text'])
-            vtt_file.write(f"{start_time} --> {end_time}\n")
-            vtt_file.write(f"{text.strip()}\n\n")
-
-def convert_transcription_to_csv(transcription, csv_path):
-    with open(csv_path, 'w', encoding='utf-8', newline='') as csv_file:
-        writer = csv.writer(csv_file)
-        writer.writerow(["Start Time", "End Time", "Text"])
-        for segment in transcription['segments']:
-            start_time = format_time(segment['start'])
-            end_time = format_time(segment['end'])
-            text = clean_text(segment['text'])
-            writer.writerow([start_time, end_time, text])
-
-def convert_transcription_to_tsv(transcription, tsv_path):
-    with open(tsv_path, 'w', encoding='utf-8', newline='') as tsv_file:
-        writer = csv.writer(tsv_file, delimiter='\t')
-        writer.writerow(["Start Time", "End Time", "Text"])
-        for segment in transcription['segments']:
-            start_time = format_time(segment['start'])
-            end_time = format_time(segment['end'])
-            text = clean_text(segment['text'])
-            writer.writerow([start_time, end_time, text])
-
-def transcribe_segments_with_whisper(segment_files, pyannote_timestamps, accurate=False, **kwargs):
-    # À implémenter si besoin de transcrire plusieurs segments avec timestamps externes
-    pass
-
-def transcribe_audio(audio_path, transcript_base_name, model_name=None, accurate=False, use_gpu=None, **kwargs):
-    """
-    Transcrit un fichier audio avec le modèle Whisper spécifié (compatible avec whisper_timestamped).
-    """
-    import whisper_timestamped as whisper
-
-    logging.getLogger("huggingface_hub").setLevel(logging.WARNING)
-
-    if model_name is None:
-        model_name = "large-v3"
-    logging.info(f"ℹ️ Modèle sélectionné pour la transcription: {model_name}")
-
-    if use_gpu is None:
-        use_gpu = torch.cuda.is_available()
-    device = "cuda" if use_gpu else "cpu"
-
-    if device == "cpu" and ("large" in model_name or "turbo" in model_name):
-        logging.info(f"💡 Modèle {model_name} trop lourd pour CPU, remplacement par 'small'")
-        model_name = "small"
-
-    progress_queue.put({
-        "value": 20,
-        "status_text": f"Chargement du modèle {model_name}..."
-    })
-
-    logging.info(f"🚀 Chargement du modèle {model_name} sur {device}")
-    model = whisper.load_model(model_name, device=device)
-
-    progress_queue.put({
-        "value": 30,
-        "status_text": f"Transcription en cours avec {model_name}..."
-    })
-
-    # Options plus précises si "accurate"
-    if accurate:
-        kwargs['beam_size'] = 5
-        kwargs['best_of'] = 5
-        kwargs['temperature'] = (0.0, 0.2, 0.4, 0.6, 0.8, 1.0)
-        kwargs.pop('accurate', None)
-
-    result = whisper.transcribe(model, audio_path, **kwargs)
-
-    with open(f"{transcript_base_name}.json", 'w', encoding='utf-8') as f:
-        json.dump(result, f, ensure_ascii=False, indent=4)
-
-    convert_transcription_to_srt(result, f"{transcript_base_name}.srt")
-    convert_transcription_to_vtt(result, f"{transcript_base_name}.vtt")
-    convert_transcription_to_csv(result, f"{transcript_base_name}.csv")
-    convert_transcription_to_tsv(result, f"{transcript_base_name}.tsv")
-
-    logging.info(f"✅ Transcription enregistrée sous {transcript_base_name} aux formats .json/.srt/.vtt/.csv/.tsv")
-
-    return result
-
-def run_transcription(model, audio_path, transcript_base_name, **kwargs):
-    if 'accurate' in kwargs and kwargs['accurate']:
-        kwargs['beam_size'] = 5
-        kwargs['best_of'] = 5
-        kwargs['temperature'] = (0.0, 0.2, 0.4, 0.6, 0.8, 1.0)
-        del kwargs['accurate']
-
-    default_params = {
-        "language": None,
+def run_transcription(
+    audio_path: str,
+    base_name: str,
+    model_name: Optional[str] = None,
+    accurate: bool = False,
+    vad_method: str = "silero:v3.1",
+    language: Optional[str] = None,
+    **kwargs
+) -> Dict:
+    defaults = {
+        "language": language,
         "task": "transcribe",
-        "beam_size": None,
-        "best_of": None,
-        "temperature": 0.0,
-        "vad": False,
-        "detect_disfluencies": False,
+        "vad": vad_method,
         "compute_word_confidence": True,
-        "include_punctuation_in_confidence": False,
-        "refine_whisper_precision": 0.5,
+        "include_punctuation_in_confidence": True,
+        "detect_disfluencies": True,
+        "refine_whisper_precision": 0.1,
         "min_word_duration": 0.02,
-        "trust_whisper_timestamps": True,
-        "remove_empty_words": False,
-        "plot_word_alignment": False,
-        "compression_ratio_threshold": 2.4,
-        "logprob_threshold": -1.0,
-        "no_speech_threshold": 0.6,
+        "trust_whisper_timestamps": False,
+        "compression_ratio_threshold": 1.5,
+        "logprob_threshold": -0.5,
+        "no_speech_threshold": 0.5,
         "condition_on_previous_text": True,
-        "initial_prompt": None,
         "suppress_tokens": "-1",
-        "fp16": None,
-        "verbose": False
+        "# Afficher live la transcription": None,
+        "verbose": True,  # <- Activation de l'affichage pendant la transcription
+        "temperature": (0.0, 0.2, 0.4, 0.6, 0.8, 1.0),
     }
 
-    for key, value in default_params.items():
-        if key not in kwargs:
-            kwargs[key] = value
+    if accurate:
+        defaults.update({"beam_size": 5, "best_of": 5})
+    else:
+        defaults.update({"beam_size": None, "best_of": None})
 
-    result = whisper.transcribe(model, audio_path, **kwargs)
+    kwargs.pop("use_gpu", None)
+    kwargs.pop("punctuations_with_words", None)
+    params = {k: v for k, v in defaults.items() if v is not None}
+    params.update(kwargs)
 
-    transcript_json_path = f"{transcript_base_name}.json"
-    with open(transcript_json_path, 'w', encoding='utf-8') as f:
-        json.dump(result, f, ensure_ascii=False, indent=4)
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model_to_load = model_name or config.whisper_model
+    logging.info(f"Chargement du modèle {model_to_load} sur {device}")
+    progress_queue.put({"value": 20, "status_text": f"Transcription sur {device}..."})
+    model = whisper.load_model(model_to_load, device=device)
 
-    convert_transcription_to_srt(result, f"{transcript_base_name}.srt")
-    convert_transcription_to_vtt(result, f"{transcript_base_name}.vtt")
-    convert_transcription_to_csv(result, f"{transcript_base_name}.csv")
-    convert_transcription_to_tsv(result, f"{transcript_base_name}.tsv")
+    try:
+        result = whisper.transcribe(model, audio_path, **params)
+    except AssertionError as ae:
+        logging.warning("Timestamped failed (%s), fallback transcription.", ae)
+        basic = model.transcribe(
+            audio_path,
+            language=language,
+            beam_size=params.get("beam_size"),
+            best_of=params.get("best_of"),
+            temperature=params.get("temperature")
+        )
+        result = {"language": basic["language"], "segments": basic["segments"]}
 
-    print(f"Transcription completed and saved to {transcript_base_name} in various formats.")
+    _write_all_outputs(result, base_name)
+    return result
 
-def transcribe_vocal(audio_path, transcript_base_name, model_name='openai/whisper-large-v3-turbo', accurate=False, use_gpu=None, **kwargs):
-    transcribe_audio(
+
+def transcribe_audio(
+    audio_path: str,
+    base_name: str,
+    model_name: Optional[str] = None,
+    accurate: bool = False,
+    vad_method: str = "silero:v3.1",
+    language: Optional[str] = None,
+    **extra
+) -> Dict:
+    progress_queue.put({"value": 10, "status_text": "📥 Chargement du modèle Whisper..."})
+    return run_transcription(
         audio_path=audio_path,
-        transcript_base_name=transcript_base_name,
+        base_name=base_name,
         model_name=model_name,
         accurate=accurate,
-        use_gpu=use_gpu,
-        **kwargs
+        vad_method=vad_method,
+        language=language,
+        **extra
+    )
+
+
+def transcribe_vocal(
+    audio_path: str,
+    base_name: str,
+    model_name: Optional[str] = None,
+    accurate: bool = False,
+    **extra
+) -> Dict:
+    return transcribe_audio(
+        audio_path=audio_path,
+        base_name=base_name,
+        model_name=model_name,
+        accurate=accurate,
+        **extra
     )
