@@ -1,17 +1,17 @@
+import re
 import requests
 import json
 import os
 import logging
 import concurrent.futures
 from openai import OpenAI
-from utils import config  # ✅ Added
+from utils import config
 
 # Logger configuration
 logger = logging.getLogger(__name__)
 for lib in ["httpx", "httpcore", "openai", "urllib3", "requests"]:
     logging.getLogger(lib).setLevel(logging.WARNING)
 
-# Default API keys
 deepl_key = ""
 openai_key = ""
 client = None
@@ -120,17 +120,48 @@ def write_file(file_path, content):
     with open(file_path, 'w', encoding='utf-8') as file:
         file.write(content)
 
-def translate_srt_file(srt_path, target_language, service='openai', mode='batched', use_threading=None):
-    """
-    Translate an SRT file using the specified translation service and mode.
 
-    :param srt_path: Path to the input SRT file
-    :param target_language: Target language code (e.g., 'FR' for French)
-    :param service: Translation service to use ('deepl', 'openai', 'o3')
-    :param mode: Translation mode ('batched' or 'threaded')
-    :param use_threading: Bool to override config.use_threading if specified
-    :return: Tuple containing translated file path and translated content
-    """
+def parse_srt_segments(srt_content):
+    # regex segments {num}\n{time}\n{text (peut être multi lignes)}
+    pattern = re.compile(
+        r'(\d+)\n(\d{2}:\d{2}:\d{2},\d{3} --> \d{2}:\d{2}:\d{2},\d{3})\n(.*?)(?=\n\d+\n|\Z)', 
+        re.DOTALL)
+    segments = []
+    last_idx = 0
+    for m in pattern.finditer(srt_content):
+        if m.start() > last_idx:
+            bloc = srt_content[last_idx:m.start()].strip()
+            if bloc:
+                segments.append({"number": None, "timecode": None, "text": bloc})
+        segments.append({
+            "number": m.group(1),
+            "timecode": m.group(2),
+            "text": m.group(3).strip()
+        })
+        last_idx = m.end()
+    if last_idx < len(srt_content):
+        bloc = srt_content[last_idx:].strip()
+        if bloc:
+            segments.append({"number": None, "timecode": None, "text": bloc})
+    return segments
+
+def reconstruct_srt(segments, translated_texts):
+    out_lines = []
+    idx_trans = 0
+    for seg in segments:
+        if seg["number"] is None:
+            out_lines.append(translated_texts[idx_trans])
+            idx_trans += 1
+        else:
+            out_lines.append(str(seg["number"]))
+            out_lines.append(seg["timecode"])
+            out_lines.append(translated_texts[idx_trans] if seg["text"] else "")
+            idx_trans += 1
+        out_lines.append("")
+    return "\n".join(out_lines).strip()
+
+
+def translate_srt_file(srt_path, target_language, service='openai', mode='batched', use_threading=None):
     if use_threading is None:
         use_threading = config.use_threading
 
@@ -139,71 +170,78 @@ def translate_srt_file(srt_path, target_language, service='openai', mode='batche
     else:
         return translate_srt_file_batched(srt_path, target_language, service)
 
-def translate_srt_file_threaded(srt_path, target_language, service, max_workers=4):
+def translate_srt_file_batched(srt_path, target_language, service, batch_size=10):
     content = read_file(srt_path)
-    segments = content.split('\n\n')
+    segments = parse_srt_segments(content)
+    translated_texts = []
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = []
-        segment_data = []
+    for i in range(0, len(segments), batch_size):
+        batch = segments[i:i + batch_size]
+        # batch_texts est la liste de tous les textes de ce batch y compris les orphelins
+        batch_texts = [seg["text"] for seg in batch]
+        result_batch = []
 
-        for segment in segments:
-            lines = segment.split('\n')
-            if len(lines) >= 2:
-                segment_number = lines[0]
-                timecodes = lines[1]
-                text_to_translate = '\n'.join(lines[2:]) if len(lines) > 2 else ""
-
-                if text_to_translate.strip():
-                    if service.lower() == "deepl":
-                        future = executor.submit(translate_text_deepl, text_to_translate, target_language)
-                    elif service.lower() in ("o3", "o3-mini"):
-                        future = executor.submit(translate_text_o3, text_to_translate, target_language)
-                    else:
-                        future = executor.submit(translate_text_openai, text_to_translate, target_language)
-
-                    futures.append(future)
-                    segment_data.append((segment_number, timecodes, text_to_translate, True))
+        if service.lower() in ("o3", "o3-mini"):
+            # Traduire batch complet groupé (si tous les batch_text sont non vides)
+            for text in batch_texts:
+                if text.strip():
+                    translation = translate_text_o3(text, target_language)
+                    retries = 3
+                    while not verify_translation(translation, target_language) and retries > 0:
+                        translation = translate_text_o3(text, target_language)
+                        retries -= 1
+                    result_batch.append(translation)
                 else:
-                    segment_data.append((segment_number, timecodes, "", False))
+                    result_batch.append("")
+        elif service.lower() == "deepl":
+            for text in batch_texts:
+                if text.strip():
+                    result_batch.append(translate_text_deepl(text, target_language))
+                else:
+                    result_batch.append("")
+        else:
+            for text in batch_texts:
+                if text.strip():
+                    result_batch.append(translate_text_openai(text, target_language))
+                else:
+                    result_batch.append("")
+        translated_texts.extend(result_batch)
 
-        translated_segments = []
-        for idx, (segment_number, timecodes, text, needs) in enumerate(segment_data):
-            if needs:
-                translation = futures[idx].result()
-                translated_segments.append(f"{segment_number}\n{timecodes}\n{translation}")
-            else:
-                translated_segments.append(f"{segment_number}\n{timecodes}\n{text}")
-
-    translated_content = '\n\n'.join(translated_segments)
+    translated_content = reconstruct_srt(segments, translated_texts)
     translated_path = srt_path.replace('.srt', f'_translated_{target_language}.srt')
     write_file(translated_path, translated_content)
     return translated_path, translated_content
 
-def translate_srt_file_batched(srt_path, target_language, service, batch_size=10):
+def translate_srt_file_threaded(srt_path, target_language, service, max_workers=4):
     content = read_file(srt_path)
-    segments = content.split('\n\n')
-    translated_content = ""
+    segments = parse_srt_segments(content)
+    translated_texts = [None]*len(segments)
 
-    for i in range(0, len(segments), batch_size):
-        batch = segments[i:i + batch_size]
-        batch_text = "\n\n".join(batch)
-
-        if service.lower() in ("o3", "o3-mini"):
-            translated_batch = translate_text_o3(batch_text, target_language)
+    def translate_one(idx, text):
+        if not text.strip():
+            return ""
+        if service.lower() == "deepl":
+            return translate_text_deepl(text, target_language)
+        elif service.lower() in ("o3", "o3-mini"):
+            translation = translate_text_o3(text, target_language)
             retries = 3
-            while not verify_translation(translated_batch, target_language) and retries > 0:
-                translated_batch = translate_text_o3(batch_text, target_language)
+            while not verify_translation(translation, target_language) and retries > 0:
+                translation = translate_text_o3(text, target_language)
                 retries -= 1
-        elif service.lower() == "deepl":
-            translated_batch = "\n\n".join(translate_text_deepl(seg, target_language) for seg in batch)
+            return translation
         else:
-            translated_batch = translate_text_openai(batch_text, target_language)
+            return translate_text_openai(text, target_language)
 
-        if i > 0:
-            translated_content += "\n\n"
-        translated_content += translated_batch
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_dict = {
+            executor.submit(translate_one, idx, seg["text"]): idx
+            for idx, seg in enumerate(segments)
+        }
+        for future in concurrent.futures.as_completed(future_dict):
+            idx = future_dict[future]
+            translated_texts[idx] = future.result()
 
+    translated_content = reconstruct_srt(segments, translated_texts)
     translated_path = srt_path.replace('.srt', f'_translated_{target_language}.srt')
     write_file(translated_path, translated_content)
     return translated_path, translated_content
